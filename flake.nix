@@ -12,7 +12,7 @@
         pkgs = import nixpkgs { inherit system; };
         
         # Explicitly pins the Go version for consistency
-        goEnv = pkgs.go_1_26;
+        goEnv = pkgs.go_1_24;
       in
       {
         # 1. Unified Development Shell (`nix develop`)
@@ -79,10 +79,10 @@ EOF
         packages.default = pkgs.buildGoModule {
           pname = "my-go-app"; # Change this to match your actual binary name
           version = "0.1.0";
-          src = ./.;
+          src = ./cmd/taskmaster;
 
           # Swap pkgs.lib.fakeHash with the true hash output by Nix on the first build failure
-          vendorHash = pkgs.lib.fakeHash; 
+          vendorHash = "g3xhqpq09nnldk02g9czrlapd0qsrlws"; 
         };
       });
 }
