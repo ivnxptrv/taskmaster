@@ -5,5 +5,5 @@ tmp/
 AGENT.md
 CLAUDE.md
 GEMINI.md
-./supervisor*
-./taskmaster
+/supervisor*
+/taskmaster
