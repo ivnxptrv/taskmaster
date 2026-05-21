@@ -2,8 +2,8 @@
 .idea
 *.log
 tmp/
-taskmaster
 AGENT.md
 CLAUDE.md
 GEMINI.md
-supervisor*
+./supervisor*
+./taskmaster
