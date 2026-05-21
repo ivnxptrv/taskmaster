@@ -1,5 +1,5 @@
 {
-  description = "A playground environment for Supervisor (supervisord/supervisorctl)";
+  description = "A merged playground for Go development and Supervisor (supervisord/supervisorctl)";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
@@ -10,19 +10,35 @@
     utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
+        
+        # Explicitly pins the Go version for consistency
+        goEnv = pkgs.go_1_26;
       in
       {
+        # 1. Unified Development Shell (`nix develop`)
         devShells.default = pkgs.mkShell {
-          buildInputs = [ pkgs.python3Packages.supervisor ];
+          buildInputs = [
+            # Go Toolchain & Ecosystem
+            goEnv
+            pkgs.gopls
+            pkgs.gotools
+            pkgs.golangci-lint
+            pkgs.delve
+
+            # Process Management
+            pkgs.python3Packages.supervisor
+          ];
 
           shellHook = ''
             echo "========================================================="
-            echo "      Welcome to the Supervisor Playground!              "
+            echo "      Welcome to the Go & Supervisor Playground!         "
             echo "========================================================="
-            echo "Available commands:"
-            echo "  gen-super-conf  -> Generate a local supervisor.conf"
-            echo "  start-super     -> Start supervisord with local conf"
-            echo "  super-shell     -> Open interactive supervisorctl shell"
+            echo "Go Version:  $(go version)"
+            echo "========================================================="
+            echo "Available Supervisor commands:"
+            echo "  gen-super-conf  → Generate a local supervisor.conf"
+            echo "  start-super     → Start supervisord with local conf"
+            echo "  super-shell     → Open interactive supervisorctl shell"
             echo "========================================================="
 
             # Helper alias to generate a working local config
@@ -57,6 +73,16 @@ EOF
             # Helper alias to drop straight into the control shell
             alias super-shell='supervisorctl -c supervisor.conf'
           '';
+        };
+
+        # 2. Package configuration (`nix build`)
+        packages.default = pkgs.buildGoModule {
+          pname = "my-go-app"; # Change this to match your actual binary name
+          version = "0.1.0";
+          src = ./.;
+
+          # Swap pkgs.lib.fakeHash with the true hash output by Nix on the first build failure
+          vendorHash = pkgs.lib.fakeHash; 
         };
       });
 }
