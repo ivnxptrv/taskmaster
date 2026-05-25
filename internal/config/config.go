@@ -11,23 +11,6 @@ type Config struct {
 	Programs map[string]Program `yaml:"programs"`
 }
 
-func Load(filepath string) (*Config, error) {
-	data, err := os.ReadFile(filepath)
-	if err != nil {
-		return nil, err
-	}
-
-	config := &Config{Filepath: filepath}
-
-	err = yaml.Unmarshal(data, config)
-	if err != nil {
-		return nil, err
-	}
-
-	return config, nil
-}
-
-// config.Print(cfg)
 func (c Config) Print() {
 	encoder := yaml.NewEncoder(os.Stdout)
 	defer encoder.Close()
@@ -38,15 +21,15 @@ func (c Config) Print() {
 	}
 }
 
-// func validConfig(c *Config) error {
-// 	if len(c.Programs) == 0 {
-// 		return fmt.Errorf("config must contain at least one program")
-// 	}
-// 	for name, p := range c.Programs {
-// 		if p.Cmd == "" {
-// 			return fmt.Errorf("program %s: cmd is required", name)
-// 		}
-// 		if p.Numprocs == ""
-// 	}
-// 	return nil
-// }
+func (c Config) Validate() error {
+	if len(c.Programs) == 0 {
+		return fmt.Errorf("config must contain at least one program")
+	}
+	for name, p := range c.Programs {
+		err := p.validate()
+		if err != nil {
+			return fmt.Errorf("program '%s': %w", name, err)
+		}
+	}
+	return nil
+}

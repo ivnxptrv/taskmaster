@@ -64,6 +64,7 @@ func (p Program) getFields() []Field {
 		&p.Stoptime,
 		&p.Stdout,
 		&p.Stderr,
+		&p.Env,
 	}
 }
 

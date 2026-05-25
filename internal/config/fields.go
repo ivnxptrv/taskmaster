@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 )
 
 // -----------------------------------------------
@@ -21,6 +23,18 @@ func (c *Cmd) setDefault() {
 }
 
 func (c Cmd) validate() error {
+	p := string(c)
+	if p == "" {
+		return fmt.Errorf("path cannot be empty")
+	}
+
+	if strings.ContainsRune(p, 0) {
+		return fmt.Errorf("path contains invalid characters")
+	}
+
+	if !filepath.IsAbs(p) {
+		return fmt.Errorf("path '%s' must be an absolute path", p)
+	}
 	return nil
 }
 
@@ -36,6 +50,12 @@ func (n Numprocs) validate() error {
 	return nil
 }
 
+// func (n *Numprocs) UnmarshalYAML(value *yaml.Node) error {
+// 	if n > 25
+// 	type Alias Program
+// 	return value.Decode((*Alias)(p))
+// }
+
 // -----------------------------------------------
 
 type Umask uint32
@@ -45,14 +65,17 @@ func (u *Umask) setDefault() {
 }
 
 func (u Umask) validate() error {
+	if u > 0777 {
+		return fmt.Errorf("invalid umask: %s", u)
+	}
 	return nil
 }
 
 func (u Umask) String() string {
-	return fmt.Sprintf("%03o", u)
+	return fmt.Sprintf("%04o", u)
 }
 func (u Umask) MarshalYAML() (any, error) {
-	return fmt.Sprintf("%03o", u), nil
+	return fmt.Sprintf("%04o", u), nil
 }
 
 // -----------------------------------------------
@@ -64,6 +87,14 @@ func (wd *Workingdir) setDefault() {
 }
 
 func (wd Workingdir) validate() error {
+	p := string(wd)
+	if p == "" {
+		return fmt.Errorf("path cannot be empty")
+	}
+
+	if strings.ContainsRune(p, 0) {
+		return fmt.Errorf("path contains invalid characters")
+	}
 	return nil
 }
 
@@ -142,21 +173,23 @@ func (st Starttime) validate() error {
 
 type Stopsignal string
 
-const (
-	SigTerm Stopsignal = "TERM"
-)
+var SupportedSignals = map[string]struct{}{
+	"HUP": {}, "INT": {}, "QUIT": {}, "ILL": {}, "TRAP": {},
+	"ABRT": {}, "BUS": {}, "FPE": {}, "KILL": {}, "USR1": {},
+	"SEGV": {}, "USR2": {}, "PIPE": {}, "ALRM": {}, "TERM": {},
+	"CHLD": {}, "CONT": {}, "STOP": {}, "TSTP": {}, "TTIN": {},
+	"TTOU": {},
+}
 
 func (ss *Stopsignal) setDefault() {
-	*ss = SigTerm
+	*ss = "TERM"
 }
 
 func (ss Stopsignal) validate() error {
-	switch ss {
-	case SigTerm:
+	if _, exists := SupportedSignals[string(ss)]; exists {
 		return nil
-	default:
-		return fmt.Errorf("invalid signal: %s", ss)
 	}
+	return fmt.Errorf("invalid signal: %s", ss)
 }
 
 // -----------------------------------------------
@@ -176,10 +209,18 @@ func (st Stoptime) validate() error {
 type Stdout string
 
 func (s *Stdout) setDefault() {
-	*s = ""
+	*s = "/dev/null"
 }
 
 func (s Stdout) validate() error {
+	p := string(s)
+	if p == "" {
+		return fmt.Errorf("path cannot be empty")
+	}
+
+	if strings.ContainsRune(p, 0) {
+		return fmt.Errorf("path contains invalid characters")
+	}
 	return nil
 }
 
@@ -188,10 +229,18 @@ func (s Stdout) validate() error {
 type Stderr string
 
 func (s *Stderr) setDefault() {
-	*s = ""
+	*s = "/dev/null"
 }
 
 func (s Stderr) validate() error {
+	p := string(s)
+	if p == "" {
+		return fmt.Errorf("path cannot be empty")
+	}
+
+	if strings.ContainsRune(p, 0) {
+		return fmt.Errorf("path contains invalid characters")
+	}
 	return nil
 }
 
@@ -204,6 +253,7 @@ func (e *Env) setDefault() {
 }
 
 func (e Env) validate() error {
+	// return fmt.Errorf("invalid env")
 	return nil
 }
 
