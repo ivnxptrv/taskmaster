@@ -12,7 +12,7 @@
         pkgs = import nixpkgs { inherit system; };
         
         # Explicitly pins the Go version for consistency
-        goEnv = pkgs.go_1_24;
+        goEnv = pkgs.go_1_26;
       in
       {
         # 1. Unified Development Shell (`nix develop`)
