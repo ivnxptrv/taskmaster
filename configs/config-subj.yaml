@@ -6,7 +6,7 @@ programs:
     workingdir: /tmp
     autostart: true
     autorestart: unexpected
-    exitcodes: # expected normal exit codes
+    exitcodes:
       - 0
       - 2
     startretries: 3
@@ -25,7 +25,7 @@ programs:
     workingdir: /tmp
     autostart: true
     autorestart: unexpected
-    exitcodes: 0
+    exitcodes: [0]
     startretries: 3
     starttime: 5
     stopsignal: USR1

@@ -70,8 +70,8 @@ type Program struct {
 }
 
 type Config struct {
-	Filepath string    // path to config file
-	Programs []Program `yaml:"programs"`
+	Filepath string             // path to config file
+	Programs map[string]Program `yaml:"programs"`
 }
 
 func Load(filepath string) (*Config, error) {
@@ -92,6 +92,9 @@ func Load(filepath string) (*Config, error) {
 
 func (c *Config) Print() {
 	encoder := yaml.NewEncoder(os.Stdout)
+	defer encoder.Close()
 	encoder.SetIndent(2)
-	encoder.Encode(c)
+	if err := encoder.Encode(c); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to encode config: %v\n", err)
+	}
 }
