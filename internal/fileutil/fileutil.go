@@ -10,13 +10,13 @@ func FileExists(filepath string) error {
 	info, err := os.Stat(filepath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("file does not exist: %s", cleanPath)
+			return fmt.Errorf("file does not exist: %s", filepath)
 		}
 		// Return other potential errors (e.g., permission denied)
 		return fmt.Errorf("failed to check file: %w", err)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("path is a directory, not a file: %s", cleanPath)
+		return fmt.Errorf("path is a directory, not a file: %s", filepath)
 	}
 	return nil
 }
