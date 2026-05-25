@@ -19,5 +19,4 @@ func main() {
 		os.Exit(2)
 	}
 	cfg.Print()
-	// config
 }

@@ -10,49 +10,49 @@ type Args struct {
 	Filepath string
 }
 
-func argExists(arg string, msg string) (bool, error) {
+func argExists(arg string, msg string) error {
 	if arg == "" {
-		return false, fmt.Errorf("the -c flag is required")
+		return fmt.Errorf("the -c flag is required")
 	}
-	return true, nil
+	return nil
 }
 
-func fileExists(filepath string) (bool, error) {
+func fileExists(filepath string) error {
 	if _, err := os.Stat(filepath); os.IsNotExist(err) {
-		return false, fmt.Errorf("file does not exist: %s", filepath)
+		return fmt.Errorf("file does not exist: %s", filepath)
 	}
-	return true, nil
+	return nil
 }
 
-func fileReadable(filepath string) (bool, error) {
+func fileReadable(filepath string) error {
 	file, err := os.OpenFile(filepath, os.O_RDONLY, 0)
 	if err != nil {
-		return false, fmt.Errorf("cannot read file: %s (permission denied)", filepath)
+		return fmt.Errorf("cannot read file: %s (permission denied)", filepath)
 	}
 	file.Close()
-	return true, nil
+	return nil
 }
 
-func filepathValid(filepath string) (bool, error) {
-	if _, err := argExists(filepath, "the -c flag is required"); err != nil {
-		return false, err
+func filepathValid(filepath string) error {
+	if err := argExists(filepath, "the -c flag is required"); err != nil {
+		return err
 	}
 
-	if _, err := fileExists(filepath); err != nil {
-		return false, err
+	if err := fileExists(filepath); err != nil {
+		return err
 	}
 
-	if _, err := fileReadable(filepath); err != nil {
-		return false, err
+	if err := fileReadable(filepath); err != nil {
+		return err
 	}
-	return true, nil
+	return nil
 }
 
-func argsValid(args Args) (bool, error) {
-	if res, err := filepathValid(args.Filepath); res != true {
-		return false, err
+func argsValid(args Args) error {
+	if err := filepathValid(args.Filepath); err != nil {
+		return err
 	}
-	return true, nil
+	return nil
 }
 
 func initArgs() (Args, error) {
@@ -67,8 +67,8 @@ func parseArgs() (Args, error) {
 	if err != nil {
 		return Args{}, err
 	}
-	res, err := argsValid(args)
-	if res != true {
+	err = argsValid(args)
+	if err != nil {
 		return Args{}, err
 	}
 	return args, nil
