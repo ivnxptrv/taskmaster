@@ -147,7 +147,7 @@ func (as Exitcodes) validate() error {
 
 // -----------------------------------------------
 
-type Startretries uint32
+type Startretries uint16
 
 func (sr *Startretries) setDefault() {
 	*sr = 3

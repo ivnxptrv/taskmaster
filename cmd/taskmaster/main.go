@@ -30,5 +30,6 @@ func main() {
 	}
 
 	// print config
-	cfg.Print()
+	// cfg.Print()
+
 }
