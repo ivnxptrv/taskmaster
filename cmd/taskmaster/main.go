@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"taskmaster/internal/config"
-	"taskmaster/internal/manager"
+	"taskmaster/internal/engine"
 )
 
 func main() {
@@ -23,7 +23,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
-
 	// validate config
 	err = cfg.Validate()
 	if err != nil {
@@ -31,17 +30,27 @@ func main() {
 		os.Exit(3)
 	}
 
-	m := manager.NewManager(cfg)
-	// err = m.Validate()
+	// local daemon to recevive cmds to start processes
+	s := engine.NewSpawner()
 
-	// if err != nil {
-	// 	fmt.Fprintf(os.Stderr, "error: %v\n", err)
-	// 	os.Exit(4)
-	// }
+	// create manager
+	m := engine.NewManager(s, cfg)
+	// validate manager
+	err = m.Validate()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(4)
+	}
 
-	cfg.Print()
-	m.Print()
+	// cfg.Print()
+	// m.Print()
 	// print config
 	// cfg.Print()
+
+	err = m.Boot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(5)
+	}
 
 }

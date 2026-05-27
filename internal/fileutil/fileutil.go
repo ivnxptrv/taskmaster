@@ -3,6 +3,7 @@ package fileutil
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // and not Dir
@@ -79,4 +80,14 @@ func DirExecutable(dirpath string) error {
 	}
 
 	return nil
+}
+
+func OpenOutput(path string) (*os.File, error) {
+	dir := filepath.Dir(path)
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
+
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 }

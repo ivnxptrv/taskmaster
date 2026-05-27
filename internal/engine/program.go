@@ -1,6 +1,7 @@
-package manager
+package engine
 
 import (
+	"strings"
 	"syscall"
 	"taskmaster/internal/config"
 	"taskmaster/internal/fileutil"
@@ -9,12 +10,12 @@ import (
 
 // -----------------------------------------------
 
-type Cmd string
+type Bin string
 
-func (c *Cmd) valdiate() error {
+func (b *Bin) valdiate() error {
 	var err error
 
-	p := string(*c)
+	p := string(*b)
 	if err = fileutil.FileExists(p); err != nil {
 		return err
 	}
@@ -24,8 +25,14 @@ func (c *Cmd) valdiate() error {
 	return nil
 }
 
-func (c *Cmd) String() string {
-	return string(*c)
+func cmdToBin(c config.Cmd) Bin {
+	bin, _, _ := strings.Cut(string(c), " ")
+	return Bin(bin)
+}
+
+func cmdToArgs(c config.Cmd) []string {
+	parts := strings.Fields(string(c))
+	return parts[1:]
 }
 
 // -----------------------------------------------
@@ -57,10 +64,10 @@ func (oS *outStream) valdiate() error {
 	var err error
 
 	p := string(*oS)
-	if err = fileutil.FileExists(p); err != nil {
-		return err
-	}
-	if err = fileutil.FileWritable(p); err != nil {
+	if err = fileutil.FileExists(p); err == nil {
+		if err = fileutil.FileWritable(p); err != nil {
+			return err
+		}
 		return err
 	}
 	return nil
@@ -120,12 +127,24 @@ var stringSignalToSyscall = map[string]syscall.Signal{
 
 // -----------------------------------------------
 
-func envToSlice(env config.Env) []string {
-	result := make([]string, 0, len(env))
-	for k, v := range env {
+func buildEnv(env config.Env, environ map[string]string) []string {
+	resultMap := make(map[string]string)
+	for k, v := range environ {
+		resultMap[k] = v
+	}
+
+	if env != nil {
+		for k, v := range env {
+			resultMap[k] = v
+		}
+	}
+
+	result := make([]string, 0, len(resultMap))
+	for k, v := range resultMap {
 		result = append(result, k+"="+v)
 	}
 	return result
+
 }
 
 // -----------------------------------------------
@@ -133,7 +152,10 @@ func envToSlice(env config.Env) []string {
 type Program struct {
 	name string
 
-	cmd          Cmd // validate
+	manager *Manager
+
+	bin          Bin // validate
+	args         []string
 	numprocs     uint8
 	umask        uint32
 	workingdir   Workingdir // validate
@@ -154,7 +176,7 @@ type Program struct {
 func (p *Program) validate() error {
 	var err error
 
-	if err = p.cmd.valdiate(); err != nil {
+	if err = p.bin.valdiate(); err != nil {
 		return err
 	}
 
@@ -173,12 +195,14 @@ func (p *Program) validate() error {
 	return nil
 }
 
-func newProgram(nameP string, cfgP *config.Program) *Program {
+func newProgram(nameP string, m *Manager, cfgP *config.Program) *Program {
 	num := uint8(cfgP.Numprocs)
 
-	return &Program{
+	prg := &Program{
+		manager:      m,
 		name:         nameP,
-		cmd:          Cmd(cfgP.Cmd),
+		bin:          cmdToBin(cfgP.Cmd),
+		args:         cmdToArgs(cfgP.Cmd),
 		numprocs:     num,
 		umask:        uint32(cfgP.Umask),
 		workingdir:   Workingdir(cfgP.Workingdir),
@@ -191,7 +215,25 @@ func newProgram(nameP string, cfgP *config.Program) *Program {
 		stoptime:     time.Duration(cfgP.Stoptime),
 		stdout:       outStream(cfgP.Stdout),
 		stderr:       outStream(cfgP.Stderr),
-		env:          envToSlice(cfgP.Env),
+		env:          buildEnv(cfgP.Env, m.environ),
 		procs:        make([]*Process, 0, num),
 	}
+
+	for i := range num {
+		p := newProcess(prg, i)
+		prg.procs = append(prg.procs, p)
+	}
+
+	return prg
+}
+
+func (prg *Program) iter(f func(*Process) error) error {
+	for _, v := range prg.procs {
+		err := f(v)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

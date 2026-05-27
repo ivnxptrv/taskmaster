@@ -1,6 +1,6 @@
 programs:
   nginx:
-    cmd: "/usr/local/bin/nginx -c /etc/nginx/test.conf"
+    cmd: '/usr/bin/nginx -p . -c configs/nginx/nginx.conf -e /dev/stderr -g "pid /tmp/nginx.pid;"'
     numprocs: 1
     umask: 022
     workingdir: /tmp
@@ -18,8 +18,8 @@ programs:
     env:
       STARTED_BY: taskmaster
       ANSWER: 42
-  vogsphere:
-    cmd: "/usr/local/bin/vogsphere-worker --no-prefork"
+  worker:
+    cmd: '/usr/bin/sh -c ''while true; do echo "Process $(hostname) is working..."; sleep 5; done'''
     numprocs: 8
     umask: 077
     workingdir: /tmp
@@ -30,5 +30,5 @@ programs:
     starttime: 5
     stopsignal: USR1
     stoptime: 10
-    stdout: /tmp/vgsworker.stdout
-    stderr: /tmp/vgsworker.stderr
+    stdout: /tmp/worker.stdout
+    stderr: /tmp/worker.stderr
