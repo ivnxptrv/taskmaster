@@ -52,7 +52,7 @@ func NewManager(s *Spawner, cfg *config.Config) *Manager {
 		spawner:  s,
 		programs: make(map[string]*Program),
 		environ:  getCurrentEnv(),
-		events:   make(chan event),
+		events:   make(chan event, 100),
 		commands: make(chan command),
 	}
 
@@ -80,20 +80,22 @@ func (m *Manager) iter(f func(*Program) error) error {
 }
 
 // eventloop
-// func (m *Manager) listen() {
-// 	for {
-// 		select {
+func (m *Manager) listen() {
+	for {
+		select {
 
-// 		// listen for events happened to processes
-// 		case e := <-m.events:
-// 			e.handle()
+		// listen for events happened to processes
+		case e := <-m.events:
+			e.handle()
 
-// 			// listen to commands sent to manager by client
-// 			// case c := <- m.commands:
-// 			// 	c.handle()
-// 		}
-// 	}
-// }
+			// listen to commands sent to manager by client
+			// case c := <- m.commands:
+			// 	c.handle()
+			// case <-time.After(3 * time.Second):
+			// 	fmt.Println("DEADLOCK DEBUG: Channel receive timed out!")
+		}
+	}
+}
 
 func autostart(p *Program) error {
 	if p.autostart == true {
@@ -107,11 +109,13 @@ func autostart(p *Program) error {
 
 // loop through proccesses and start all which with autostart true
 func (m *Manager) Boot() error {
-	// err := m.iter(autostart)
-	// if err != nil {
-	// 	return err
-	// }
 
-	m.spawner.spawn(m.programs["nginx"].procs[0])
-	return nil
+	err := m.iter(autostart)
+	if err != nil {
+		return err
+	}
+
+	m.listen()
+
+	return err
 }

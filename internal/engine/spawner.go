@@ -9,6 +9,7 @@ import (
 
 type SpawnRequest struct {
 	process    *Process
+	eventsChan chan event
 	resultChan chan error
 }
 
@@ -53,16 +54,16 @@ func (s *Spawner) processRequest(req SpawnRequest) error {
 
 	// spawn listener for starttime
 	p.startTimer = time.AfterFunc(prg.starttime, func() {
-		s.manager.events <- StartTimerFired{proc: p}
+		req.eventsChan <- StartTimerFired{proc: p}
 	})
 
 	// spawn listener for child exit
 	go func() {
 		err := cmd.Wait()
-		s.manager.events <- ProcExited{proc: p, err: err}
+		req.eventsChan <- ProcExited{proc: p, err: err}
 	}()
 
-	return err
+	return nil
 
 }
 
@@ -86,8 +87,8 @@ func (s *Spawner) spawn(p *Process) error {
 	resChan := make(chan error, 1)
 	s.requestQueue <- SpawnRequest{
 		process:    p,
+		eventsChan: p.parent.manager.events,
 		resultChan: resChan,
 	}
-
 	return <-resChan
 }

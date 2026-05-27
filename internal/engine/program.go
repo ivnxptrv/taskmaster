@@ -230,6 +230,7 @@ func newProgram(nameP string, m *Manager, cfgP *config.Program) *Program {
 func (prg *Program) iter(f func(*Process) error) error {
 	for _, v := range prg.procs {
 		err := f(v)
+
 		if err != nil {
 			return err
 		}

@@ -1,7 +1,7 @@
 package engine
 
 import (
-// "fmt"
+	"log"
 )
 
 // -----------------------------------------------
@@ -48,6 +48,8 @@ type ProcExited struct {
 }
 
 func (e ProcExited) handle() error {
+
+	log.Println("DEBUG: procexited")
 	return nil
 }
 
