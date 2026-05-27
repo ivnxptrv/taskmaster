@@ -16,7 +16,24 @@ type Manager struct {
 	commands chan Command
 }
 
-func NewManager(cfg *config.Config) (*Manager, error) {
+func (m Manager) Validate() error {
+	for _, p := range m.programs {
+		err := p.validate()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m Manager) Print() {
+
+	for name, p := range m.programs {
+		fmt.Printf("program[%s]: %+v\n\n", name, p)
+	}
+}
+
+func NewManager(cfg *config.Config) *Manager {
 	mgr := &Manager{
 		cfg:      cfg,
 		programs: make(map[string]*Program),
@@ -25,21 +42,15 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		commands: make(chan Command),
 	}
 
-	err := hydratePrograms(mgr.programs, cfg)
-	if err != nil {
-		return nil, err
-	}
-	return mgr, nil
+	hydratePrograms(mgr.programs, cfg)
+
+	return mgr
 }
 
-func hydratePrograms(programs map[string]*Program, cfg *config.Config) error {
+func hydratePrograms(programs map[string]*Program, cfg *config.Config) {
 
 	for name, cfgP := range cfg.Programs {
-		p, err := newProgram(&cfgP)
-		if err != nil {
-			return err
-		}
+		p := newProgram(name, &cfgP)
 		programs[name] = p
 	}
-	return nil
 }

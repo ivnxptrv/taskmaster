@@ -1,8 +1,6 @@
 package manager
 
 import (
-	"os"
-	"os/exec"
 	"syscall"
 	"taskmaster/internal/config"
 	"taskmaster/internal/fileutil"
@@ -74,8 +72,6 @@ func (oS *outStream) String() string {
 
 // -----------------------------------------------
 
-// -----------------------------------------------
-
 type Autorestart uint8
 
 const (
@@ -83,6 +79,54 @@ const (
 	RestartAlways
 	RestartNever
 )
+
+func AutorestartToEnum(r config.Autorestart) Autorestart {
+	switch r {
+	case config.RestartUnexpected:
+		return RestartUnexpected
+	case config.RestartAlways:
+		return RestartAlways
+	case config.RestartNever:
+		return RestartNever
+	}
+	return RestartUnexpected
+}
+
+// -----------------------------------------------
+
+var stringSignalToSyscall = map[string]syscall.Signal{
+	"HUP":  syscall.SIGHUP,
+	"INT":  syscall.SIGINT,
+	"QUIT": syscall.SIGQUIT,
+	"ILL":  syscall.SIGILL,
+	"TRAP": syscall.SIGTRAP,
+	"ABRT": syscall.SIGABRT,
+	"BUS":  syscall.SIGBUS,
+	"FPE":  syscall.SIGFPE,
+	"KILL": syscall.SIGKILL,
+	"USR1": syscall.SIGUSR1,
+	"SEGV": syscall.SIGSEGV,
+	"USR2": syscall.SIGUSR2,
+	"PIPE": syscall.SIGPIPE,
+	"ALRM": syscall.SIGALRM,
+	"TERM": syscall.SIGTERM,
+	"CHLD": syscall.SIGCHLD,
+	"CONT": syscall.SIGCONT,
+	"STOP": syscall.SIGSTOP,
+	"TSTP": syscall.SIGTSTP,
+	"TTIN": syscall.SIGTTIN,
+	"TTOU": syscall.SIGTTOU,
+}
+
+// -----------------------------------------------
+
+func envToSlice(env config.Env) []string {
+	result := make([]string, 0, len(env))
+	for k, v := range env {
+		result = append(result, k+"="+v)
+	}
+	return result
+}
 
 // -----------------------------------------------
 
@@ -129,13 +173,25 @@ func (p *Program) validate() error {
 	return nil
 }
 
-func newProgram(nameP string, cfgP *config.Program) (*Program, error) {
-	p := &Program{
-		Name: nameP,
+func newProgram(nameP string, cfgP *config.Program) *Program {
+	num := uint8(cfgP.Numprocs)
+
+	return &Program{
+		name:         nameP,
+		cmd:          Cmd(cfgP.Cmd),
+		numprocs:     num,
+		umask:        uint32(cfgP.Umask),
+		workingdir:   Workingdir(cfgP.Workingdir),
+		autostart:    bool(cfgP.Autostart),
+		autorestart:  AutorestartToEnum(cfgP.Autorestart),
+		exitcodes:    []uint8(cfgP.Exitcodes),
+		startretries: uint16(cfgP.Startretries),
+		starttime:    time.Duration(cfgP.Starttime),
+		stopsignal:   stringSignalToSyscall[string(cfgP.Stopsignal)],
+		stoptime:     time.Duration(cfgP.Stoptime),
+		stdout:       outStream(cfgP.Stdout),
+		stderr:       outStream(cfgP.Stderr),
+		env:          envToSlice(cfgP.Env),
+		procs:        make([]*Process, 0, num),
 	}
-	return nil, nil
-}
-
-func validateCmd(filepath string) error {
-
 }

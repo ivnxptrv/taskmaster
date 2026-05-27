@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"taskmaster/internal/config"
+	"taskmaster/internal/manager"
 )
 
 func main() {
+
 	// parse args
 	args, err := parseArgs()
 	if err != nil {
@@ -29,6 +31,16 @@ func main() {
 		os.Exit(3)
 	}
 
+	m := manager.NewManager(cfg)
+	// err = m.Validate()
+
+	// if err != nil {
+	// 	fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	// 	os.Exit(4)
+	// }
+
+	cfg.Print()
+	m.Print()
 	// print config
 	// cfg.Print()
 

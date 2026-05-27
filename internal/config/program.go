@@ -18,7 +18,7 @@ type Program struct {
 	Workingdir Workingdir `yaml:"workingdir" hint:"Path to the directory where process runs"`
 
 	// Weather automatically start process just after config loaded
-	Autostart Autostart `yaml:"austostart"`
+	Autostart Autostart `yaml:"autostart"`
 
 	// Policy for restarting the process
 	Autorestart Autorestart `yaml:"autorestart" hint:"Options: unexpected | always | never"`

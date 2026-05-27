@@ -1,7 +1,6 @@
 package manager
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"time"
@@ -41,6 +40,6 @@ type Process struct {
 	stderrFile *os.File
 }
 
-func spawnProcess(prg *Program) (*Process, error) {
-	return &Process
-}
+// func spawnProcess(prg *Program) (*Process, error) {
+// 	return &Process
+// }
