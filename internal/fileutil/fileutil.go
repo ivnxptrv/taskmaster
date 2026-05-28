@@ -82,12 +82,17 @@ func DirExecutable(dirpath string) error {
 	return nil
 }
 
-func OpenOutput(path string) (*os.File, error) {
+func OpenOutput(path string, append bool) (*os.File, error) {
 	dir := filepath.Dir(path)
 
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
 
-	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	mode := os.O_TRUNC
+	if append == true {
+		mode = os.O_APPEND
+	}
+
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|mode, 0644)
 }

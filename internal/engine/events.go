@@ -66,7 +66,7 @@ func (e ProcExited) handle() error {
 
 	fatal, signal, code := parseProcessStatus(e.status)
 	if fatal {
-		p.state = Uknown
+		p.state = Unknown
 		// clean timers etc?
 		return fmt.Errorf("process failed")
 	}
@@ -107,7 +107,7 @@ func handleRetry(e ProcExited) {
 		p.retries += 1
 		delay := time.Second * 5
 		p.backoffTimer = time.AfterFunc(delay, func() {
-			p.parent.manager.events <- BackoffElapsed{proc: p}
+			p.parent.manager.Events <- BackoffElapsed{proc: p}
 		})
 	} else {
 		p.state = Fatal
@@ -118,6 +118,7 @@ func handleRetry(e ProcExited) {
 
 func handleRestart(e ProcExited, code uint8) error {
 	p := e.proc
+	// change to switch
 	if p.parent.autorestart == RestartAlways {
 		err := p.parent.manager.spawner.spawn(p)
 		return err
@@ -173,6 +174,80 @@ func containsExitCode(slice []uint8, code uint8) bool {
 		}
 	}
 	return false
+}
+
+// -----------------------------------------------
+
+type Status struct {
+	Name string
+}
+
+func (e Status) handle() error {
+	// print content
+	return nil
+}
+
+// -----------------------------------------------
+
+type Start struct {
+	Name string
+}
+
+func (e Start) handle() error {
+	// search process obj
+	// spawn
+	return nil
+}
+
+// -----------------------------------------------
+
+type Stop struct {
+	Name string
+}
+
+func (e Stop) handle() error {
+	// sends stopsignal to a process
+	// start timer for stoptime
+	// set state STOPPING
+	return nil
+}
+
+// -----------------------------------------------
+
+type Restart struct {
+	Name string
+}
+
+func (e Restart) handle() error {
+	return nil
+}
+
+// -----------------------------------------------
+
+type Reload struct {
+	m   *Manager
+	res chan struct{}
+}
+
+func (e Reload) handle() error {
+	return nil
+}
+
+// -----------------------------------------------
+
+type Shutdown struct {
+	m   *Manager
+	res chan struct{}
+}
+
+func (e Shutdown) handle() error {
+	e.m.log.Debug("shutdown event received")
+	// garefuly shutdown SIGTERM
+	// inf 5s SIGKILL
+	// close files?
+	e.m.iter(despawnPrg)
+	e.res <- struct{}{}
+	return nil
 }
 
 // -----------------------------------------------

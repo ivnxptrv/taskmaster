@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"log/slog"
 	"os/exec"
 	"syscall"
 	"taskmaster/internal/fileutil"
@@ -14,11 +15,13 @@ type SpawnRequest struct {
 }
 
 type Spawner struct {
+	log          *slog.Logger
 	requestQueue chan SpawnRequest
 }
 
-func NewSpawner() *Spawner {
+func NewSpawner(log *slog.Logger) *Spawner {
 	s := &Spawner{
+		log:          log,
 		requestQueue: make(chan SpawnRequest, 10),
 	}
 	// start listener for spawn commands
@@ -47,7 +50,6 @@ func (s *Spawner) processRequest(req SpawnRequest) error {
 		return err
 	}
 
-	p.state = Starting
 	p.cmd = cmd
 	p.pid = cmd.Process.Pid
 	now := time.Now()
@@ -72,8 +74,8 @@ func createCmd(prg *Program) *exec.Cmd {
 	cmd := exec.Command(string(prg.bin), prg.args...)
 	cmd.Dir = string(prg.workingdir)
 	cmd.Env = prg.env
-	cmd.Stdout, _ = fileutil.OpenOutput(string(prg.stdout))
-	cmd.Stderr, _ = fileutil.OpenOutput(string(prg.stderr))
+	cmd.Stdout, _ = fileutil.OpenOutput(string(prg.stdout), true)
+	cmd.Stderr, _ = fileutil.OpenOutput(string(prg.stderr), true)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	return cmd
 }
@@ -86,9 +88,11 @@ func (s *Spawner) spawn(p *Process) error {
 	}
 
 	resChan := make(chan error, 1)
+	// s.log.Debug("spawn request sent", "process", p.parent.name, "index", p.index)
+	p.log.Debug("spawn request sent")
 	s.requestQueue <- SpawnRequest{
 		process:    p,
-		eventsChan: p.parent.manager.events,
+		eventsChan: p.parent.manager.Events,
 		resultChan: resChan,
 	}
 	return <-resChan

@@ -2,23 +2,21 @@ package engine
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
-	"taskmaster/internal/client"
 	"taskmaster/internal/config"
 )
 
 type Manager struct {
 	cfg     *config.Config
 	spawner *Spawner
-	// gateway  *Gateway
-	// logger   *Logger ????
+	log     *slog.Logger
 
 	programs map[string]*Program
 	environ  map[string]string
 
-	events   chan event
-	commands chan command
+	Events chan event
 }
 
 func (m Manager) Validate() error {
@@ -47,27 +45,27 @@ func getCurrentEnv() map[string]string {
 	return envMap
 }
 
-func NewManager(s *Spawner, cfg *config.Config) *Manager {
+func NewManager(s *Spawner, cfg *config.Config, log *slog.Logger) *Manager {
 	mgr := &Manager{
 		cfg:      cfg,
+		log:      log,
 		spawner:  s,
 		programs: make(map[string]*Program),
 		environ:  getCurrentEnv(),
-		events:   make(chan event, 100),
-		commands: make(chan command),
+		Events:   make(chan event, 100),
 	}
 
-	mgr.hydratePrograms(cfg)
+	for name, cfgP := range cfg.Programs {
+		log := log.With("program", name)
+		p := newProgram(name, mgr, &cfgP, log)
+		mgr.programs[name] = p
+	}
 
 	return mgr
 }
 
 func (m *Manager) hydratePrograms(cfg *config.Config) {
 
-	for name, cfgP := range cfg.Programs {
-		p := newProgram(name, m, &cfgP)
-		m.programs[name] = p
-	}
 }
 
 func (m *Manager) iter(f func(*Program) error) error {
@@ -82,19 +80,15 @@ func (m *Manager) iter(f func(*Program) error) error {
 
 // eventloop
 func (m *Manager) listen() {
-	var err error
-	for {
-		select {
-		case e := <-m.events: // listen for events happened to processes
-			err = e.handle()
-		case c := <-m.commands: // listen to commands sent to manager by client
-			err = c.handle()
-		}
+	for e := range m.Events {
+		e.handle()
+		// logger log err happened
 	}
 }
 
 func autostart(p *Program) error {
 	if p.autostart == true {
+		p.iter(setStarting)
 		err := p.iter(p.manager.spawner.spawn)
 		if err != nil {
 			return err
@@ -111,7 +105,7 @@ func (m *Manager) Boot() error {
 		return err
 	}
 
-	m.listen()
+	go m.listen()
 
 	return nil
 }

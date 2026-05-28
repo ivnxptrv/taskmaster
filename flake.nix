@@ -36,7 +36,6 @@
           ];
 
           shellHook = ''
-            fhs
             alias gen-super-conf='cat << EOF > supervisor.conf
 [supervisord]
 logfile=./supervisord.log
@@ -63,7 +62,10 @@ EOF
 
             alias start-super='supervisord -c supervisor.conf'
             alias super-shell='supervisorctl -c supervisor.conf'
+
+            fhs
           '';
+
         };
 
         packages.default = pkgs.buildGoModule {

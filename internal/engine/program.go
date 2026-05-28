@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"log/slog"
 	"strings"
 	"syscall"
 	"taskmaster/internal/config"
@@ -151,6 +152,7 @@ func buildEnv(env config.Env, environ map[string]string) []string {
 
 type Program struct {
 	name string
+	log  *slog.Logger
 
 	manager *Manager
 
@@ -195,10 +197,11 @@ func (p *Program) validate() error {
 	return nil
 }
 
-func newProgram(nameP string, m *Manager, cfgP *config.Program) *Program {
+func newProgram(nameP string, m *Manager, cfgP *config.Program, log *slog.Logger) *Program {
 	num := uint8(cfgP.Numprocs)
 
 	prg := &Program{
+		log:          log,
 		manager:      m,
 		name:         nameP,
 		bin:          cmdToBin(cfgP.Cmd),
@@ -220,7 +223,7 @@ func newProgram(nameP string, m *Manager, cfgP *config.Program) *Program {
 	}
 
 	for i := range num {
-		p := newProcess(prg, i)
+		p := newProcess(prg, i, log.With("index", i))
 		prg.procs = append(prg.procs, p)
 	}
 
@@ -237,4 +240,8 @@ func (prg *Program) iter(f func(*Process) error) error {
 	}
 
 	return nil
+}
+
+func despawnPrg(prg *Program) error {
+	return prg.iter(despawnP)
 }
