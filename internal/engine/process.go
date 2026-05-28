@@ -28,11 +28,11 @@ type Process struct {
 
 	index   uint8
 	state   State
-	retries int
+	retries uint16
 
 	cmd *exec.Cmd
 
-	// pid        int
+	pid        int
 	startedAt  *time.Time
 	startTimer *time.Timer
 	stopTimer  *time.Timer
@@ -42,11 +42,11 @@ type Process struct {
 
 func newProcess(prg *Program, index uint8) *Process {
 	return &Process{
-		parent:  prg,
-		index:   index,
-		state:   Stopped,
-		retries: 0,
-		// pid:        -1,
+		parent:     prg,
+		index:      index,
+		state:      Stopped,
+		retries:    0,
+		pid:        -1,
 		cmd:        nil,
 		startedAt:  nil,
 		stopTimer:  nil,

@@ -49,6 +49,7 @@ func (s *Spawner) processRequest(req SpawnRequest) error {
 
 	p.state = Starting
 	p.cmd = cmd
+	p.pid = cmd.Process.Pid
 	now := time.Now()
 	p.startedAt = &now
 
@@ -60,7 +61,7 @@ func (s *Spawner) processRequest(req SpawnRequest) error {
 	// spawn listener for child exit
 	go func() {
 		err := cmd.Wait()
-		req.eventsChan <- ProcExited{proc: p, err: err}
+		req.eventsChan <- ProcExited{proc: p, status: err}
 	}()
 
 	return nil

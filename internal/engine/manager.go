@@ -4,15 +4,16 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"taskmaster/internal/client"
 	"taskmaster/internal/config"
 )
-
-type command bool
 
 type Manager struct {
 	cfg     *config.Config
 	spawner *Spawner
-	// cliet   *Client
+	// gateway  *Gateway
+	// logger   *Logger ????
+
 	programs map[string]*Program
 	environ  map[string]string
 
@@ -81,18 +82,13 @@ func (m *Manager) iter(f func(*Program) error) error {
 
 // eventloop
 func (m *Manager) listen() {
+	var err error
 	for {
 		select {
-
-		// listen for events happened to processes
-		case e := <-m.events:
-			e.handle()
-
-			// listen to commands sent to manager by client
-			// case c := <- m.commands:
-			// 	c.handle()
-			// case <-time.After(3 * time.Second):
-			// 	fmt.Println("DEADLOCK DEBUG: Channel receive timed out!")
+		case e := <-m.events: // listen for events happened to processes
+			err = e.handle()
+		case c := <-m.commands: // listen to commands sent to manager by client
+			err = c.handle()
 		}
 	}
 }
@@ -117,5 +113,5 @@ func (m *Manager) Boot() error {
 
 	m.listen()
 
-	return err
+	return nil
 }
