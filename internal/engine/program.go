@@ -13,7 +13,7 @@ import (
 
 type Bin string
 
-func (b *Bin) valdiate() error {
+func (b *Bin) validate() error {
 	var err error
 
 	p := string(*b)
@@ -40,7 +40,7 @@ func cmdToArgs(c config.Cmd) []string {
 
 type Workingdir string
 
-func (wd *Workingdir) valdiate() error {
+func (wd *Workingdir) validate() error {
 	var err error
 
 	p := string(*wd)
@@ -61,7 +61,7 @@ func (wd *Workingdir) String() string {
 
 type outStream string
 
-func (oS *outStream) valdiate() error {
+func (oS *outStream) validate() error {
 	var err error
 
 	p := string(*oS)
@@ -150,16 +150,12 @@ func buildEnv(env config.Env, environ map[string]string) []string {
 
 // -----------------------------------------------
 
-type Program struct {
-	name string
-	log  *slog.Logger
-
-	manager *Manager
-
+type Spec struct {
+	name         string
 	bin          Bin // validate
 	args         []string
 	numprocs     uint8
-	umask        uint32
+	umask        int
 	workingdir   Workingdir // validate
 	autostart    bool
 	autorestart  Autorestart
@@ -171,77 +167,79 @@ type Program struct {
 	stdout       outStream //validate
 	stderr       outStream //validate
 	env          []string  // KEY=VALUE
-
-	procs []*Process
 }
 
-func (p *Program) validate() error {
+// -----------------------------------------------
+
+type Program struct {
+	spec  Spec       // desired
+	procs []*Process // current
+}
+
+func (s *Spec) validate() error {
 	var err error
 
-	if err = p.bin.valdiate(); err != nil {
+	if err = s.bin.validate(); err != nil {
 		return err
 	}
 
-	if err = p.workingdir.valdiate(); err != nil {
+	if err = s.workingdir.validate(); err != nil {
 		return err
 	}
 
-	if err = p.stdout.valdiate(); err != nil {
+	if err = s.stdout.validate(); err != nil {
 		return err
 	}
 
-	if err = p.stderr.valdiate(); err != nil {
+	if err = s.stderr.validate(); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func newProgram(nameP string, m *Manager, cfgP *config.Program, log *slog.Logger) *Program {
+func (prg *Program) getProcess(index int) (*Process, bool) {
+	if index >= len(prg.procs) {
+		return nil, false
+	}
+	return prg.procs[index], true
+}
+
+func (prg *Program) delProcess(proc *Process) {
+	if prg == nil {
+		return
+	}
+	prg.procs = append(prg.procs[:proc.index], prg.procs[proc.index+1:]...)
+}
+
+func newProgram(nameP string, cfgP *config.Program, environ map[string]string) *Program {
 	num := uint8(cfgP.Numprocs)
 
 	prg := &Program{
-		log:          log,
-		manager:      m,
-		name:         nameP,
-		bin:          cmdToBin(cfgP.Cmd),
-		args:         cmdToArgs(cfgP.Cmd),
-		numprocs:     num,
-		umask:        uint32(cfgP.Umask),
-		workingdir:   Workingdir(cfgP.Workingdir),
-		autostart:    bool(cfgP.Autostart),
-		autorestart:  AutorestartToEnum(cfgP.Autorestart),
-		exitcodes:    []uint8(cfgP.Exitcodes),
-		startretries: uint16(cfgP.Startretries),
-		starttime:    time.Duration(cfgP.Starttime),
-		stopsignal:   stringSignalToSyscall[string(cfgP.Stopsignal)],
-		stoptime:     time.Duration(cfgP.Stoptime),
-		stdout:       outStream(cfgP.Stdout),
-		stderr:       outStream(cfgP.Stderr),
-		env:          buildEnv(cfgP.Env, m.environ),
-		procs:        make([]*Process, 0, num),
+		spec: Spec{
+			name:         nameP,
+			bin:          cmdToBin(cfgP.Cmd),
+			args:         cmdToArgs(cfgP.Cmd),
+			numprocs:     num,
+			umask:        int(cfgP.Umask),
+			workingdir:   Workingdir(cfgP.Workingdir),
+			autostart:    bool(cfgP.Autostart),
+			autorestart:  AutorestartToEnum(cfgP.Autorestart),
+			exitcodes:    []uint8(cfgP.Exitcodes),
+			startretries: uint16(cfgP.Startretries),
+			starttime:    time.Duration(cfgP.Starttime),
+			stopsignal:   stringSignalToSyscall[string(cfgP.Stopsignal)],
+			stoptime:     time.Duration(cfgP.Stoptime),
+			stdout:       outStream(cfgP.Stdout),
+			stderr:       outStream(cfgP.Stderr),
+			env:          buildEnv(cfgP.Env, environ),
+		},
+		procs: make([]*Process, 0, num),
 	}
 
-	for i := range num {
-		p := newProcess(prg, i, log.With("index", i))
-		prg.procs = append(prg.procs, p)
-	}
-
+	// for i := range num {
+	// 	p := newProcess(i)
+	// 	prg.procs = append(prg.procs, p)
+	// }
 	return prg
-}
-
-func (prg *Program) iter(f func(*Process) error) error {
-	for _, v := range prg.procs {
-		err := f(v)
-
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func despawnPrg(prg *Program) error {
-	return prg.iter(despawnP)
 }

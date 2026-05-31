@@ -9,41 +9,32 @@ import (
 	"taskmaster/internal/logger"
 )
 
-func main() {
-
-	// init logger
-	log, err := logger.NewDefaultLogger()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
+func run() error {
 
 	// parse args
 	args, err := parseArgs()
 	if err != nil {
-		log.Error("failed to parse arguments", "error", err)
-		os.Exit(1)
+		fmt.Errorf("failed to parse arguments: %w", err)
+	}
+
+	// init logger
+	log, err := logger.NewDefaultLogger()
+	if err != nil {
+		return fmt.Errorf("failed to create logger: %w", err)
 	}
 
 	// load and init config
 	loader := config.NewLoader(config.Options{})
 	cfg, err := loader.Load(args.Filepath)
 	if err != nil {
-		log.Error("failed to load config", "error", err)
-		os.Exit(2)
-	}
-	// validate config
-	err = cfg.Validate()
-	if err != nil {
-		log.Error("failed to validate config", "error", err)
-		os.Exit(3)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// local daemon to recevive cmds to start processes
-	s := engine.NewSpawner(log)
+	// create runtime
+	runtime := engine.NewOsRuntime(log.With("runtime"))
 
 	// create manager
-	m := engine.NewManager(s, cfg, log)
+	m := engine.NewManager(cfg, runtime, log)
 	// validate manager
 	err = m.Validate()
 	if err != nil {
@@ -75,4 +66,11 @@ func main() {
 	// enter shell
 	shell.Enter()
 
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "taskmaster: ", err)
+		os.Exit(1)
+	}
 }

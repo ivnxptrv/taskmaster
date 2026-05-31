@@ -6,23 +6,25 @@ import (
 	"log"
 	"os/exec"
 	"syscall"
+	"taskmaster/internal/config"
 	"time"
 )
 
 // -----------------------------------------------
 
 type event interface {
-	handle() error
+	handle(m *Manager) error
 }
 
 // -----------------------------------------------
 
 // event handles finished probe for a fresh process to consider it running
 type StartTimerFired struct {
-	proc *Process
+	Name  string
+	Index uint8
 }
 
-func (e StartTimerFired) handle() error {
+func (e StartTimerFired) handle(m *Manager) error {
 	e.proc.state = Running
 	return nil
 }
@@ -55,14 +57,16 @@ func (e StopTimerFired) handle() error {
 // -----------------------------------------------
 
 type ProcExited struct {
-	proc   *Process
-	status error // from cmd.Wait() — nil if exit 0; *exec.ExitError otherwise
+	Name   string
+	Index  uint8
+	Status error // from cmd.Wait() — nil if exit 0; *exec.ExitError otherwise
 }
 
-func (e ProcExited) handle() error {
+func (e ProcExited) handle(m *Manager) error {
 	var err error
 
-	p := e.proc
+	// getProgram(Name) Program error
+	// getProcess(Index) Procces error
 
 	fatal, signal, code := parseProcessStatus(e.status)
 	if fatal {
@@ -165,6 +169,7 @@ func parseProcessStatus(status error) (bool, bool, uint8) {
 
 }
 
+// repalce to slice.contain
 func containsExitCode(slice []uint8, code uint8) bool {
 	target := code
 
@@ -225,19 +230,25 @@ func (e Restart) handle() error {
 // -----------------------------------------------
 
 type Reload struct {
-	m   *Manager
-	res chan struct{}
+	m     *Manager
+	reply chan struct{}
 }
 
 func (e Reload) handle() error {
+	loader := config.NewLoader(config.Options{})
+	cfg, err := loader.Load(e.m.cfg.Filepath)
+	if err != nil {
+		// log.Error("failed to load config", "error", err)
+	}
+
 	return nil
 }
 
 // -----------------------------------------------
 
 type Shutdown struct {
-	m   *Manager
-	res chan struct{}
+	m     *Manager
+	reply chan struct{}
 }
 
 func (e Shutdown) handle() error {

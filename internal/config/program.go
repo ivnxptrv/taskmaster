@@ -48,7 +48,7 @@ type Program struct {
 	Env Env `yaml:"env" hint:"Key-value pairs for environment"`
 }
 
-func (p Program) getFields() []Field {
+func (p *Program) getFields() []Field {
 	return []Field{
 		&p.Cmd,
 		&p.Numprocs,
@@ -59,7 +59,6 @@ func (p Program) getFields() []Field {
 		&p.Exitcodes,
 		&p.Startretries,
 		&p.Starttime,
-		&p.Stopsignal,
 		&p.Stopsignal,
 		&p.Stoptime,
 		&p.Stdout,
