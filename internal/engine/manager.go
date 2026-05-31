@@ -97,29 +97,38 @@ func NewManager(cfg *config.Config, runtime Runtime, log *slog.Logger) (*Manager
 
 // eventloop
 func (m *Manager) listen() {
-	for e := range m.events {
-		e.handle()
-		// logger log err happened
-	}
-}
+	for {
+		select {
 
-func autostart(p *Program) error {
-	if p.autostart == true {
-		p.iter(setStarting)
-		err := p.iter(p.manager.spawner.spawn)
-		if err != nil {
-			return err
+		case <-m.ctx.Done():
+			return // garefully drain events and shutdown
+
+		case e := <-m.events:
+			err := e.handle(m)
+			err = fmt.Errorf("failed to handle message: %w", err)
+			m.log.Warn(err.Error())
 		}
 	}
-	return nil
 }
 
-// loop through proccesses and start all which with autostart true
-func (m *Manager) Boot() error {
+// loop through proccesses and start all which are autostart true
+func (m *Manager) Run(ctx context.Context) error {
 
-	err := m.iter(autostart)
-	if err != nil {
-		return err
+	// attach context
+	m.ctx = ctx
+
+	// autostart
+	for _, prg := range m.programs {
+		if prg.spec.autostart {
+			for _, proc := range prg.procs {
+				err := m.spawn(prg.spec, proc)
+				proc.state = Starting
+				if err != nil {
+					err = fmt.Errorf("failed to spawn a process: %w", err)
+					m.log.Warn(err.Error())
+				}
+			}
+		}
 	}
 
 	go m.listen()
@@ -132,16 +141,16 @@ func (m *Manager) submitEvent(e event) {
 }
 
 // allocate running process object
-func (m *Manager) spawn(s Spec, index uint8) (*Process, error) {
+func (m *Manager) spawn(s Spec, proc *Process) error {
 
 	err := s.validate()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	req := SpawnRequest{
 		name:       s.name,
-		index:      index,
+		index:      proc.index,
 		bin:        string(s.bin),
 		args:       s.args,
 		umask:      s.umask,
@@ -154,40 +163,39 @@ func (m *Manager) spawn(s Spec, index uint8) (*Process, error) {
 	// TODO: own context?
 	res, err := m.runtime.SpawnProcess(m.ctx, m.events, req)
 	if err != nil {
-		return nil, err
-	}
-	var p Process
-	// spawn listener for starttime to consider process Running
-	p.startTimer = time.AfterFunc(s.starttime, func() {
-		m.events <- StartTimerFired{Name: s.name, Index: index}
-	})
-	p.startedAt = time.Now()
-	p.cmd = res.cmd
-	p.stdoutFile = res.stdoutFile
-	p.stderrFile = res.stderrFile
-
-	return &p, nil
-}
-
-// gracefully shutdown
-func (m *Manager) despawn(p *Process) error {}
-
-func (s *realSpawner) Despawn(p *Process) error {
-	if p.cmd == nil || p.cmd.Process == nil {
-		return nil // Process isn't running
-	}
-
-	p.log.Info("sending SIGTERM to process", "pid", p.pid)
-	err := p.cmd.Process.Signal(syscall.SIGTERM)
-	if err != nil {
 		return err
 	}
-
-	// Schedule SIGKILL after 5 seconds
-	p.stopTimer = time.AfterFunc(5*time.Second, func() {
-		p.log.Warn("process did not exit, sending SIGKILL", "pid", p.pid)
-		_ = p.cmd.Process.Kill()
+	// spawn listener for starttime to consider process Running
+	proc.startTimer = time.AfterFunc(s.starttime, func() {
+		m.events <- StartTimerFired{Name: s.name, Index: proc.index}
 	})
+	proc.startedAt = time.Now()
+	proc.cmd = res.cmd
+	proc.stdoutFile = res.stdoutFile
+	proc.stderrFile = res.stderrFile
 
 	return nil
 }
+
+// gracefully shutdown
+// func (m *Manager) despawn(p *Process) error {}
+
+// func (s *realSpawner) Despawn(p *Process) error {
+// 	if p.cmd == nil || p.cmd.Process == nil {
+// 		return nil // Process isn't running
+// 	}
+
+// 	p.log.Info("sending SIGTERM to process", "pid", p.pid)
+// 	err := p.cmd.Process.Signal(syscall.SIGTERM)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	// Schedule SIGKILL after 5 seconds
+// 	p.stopTimer = time.AfterFunc(5*time.Second, func() {
+// 		p.log.Warn("process did not exit, sending SIGKILL", "pid", p.pid)
+// 		_ = p.cmd.Process.Kill()
+// 	})
+
+// 	return nil
+// }

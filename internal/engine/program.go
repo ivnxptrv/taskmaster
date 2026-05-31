@@ -154,13 +154,13 @@ type Spec struct {
 	name         string
 	bin          Bin // validate
 	args         []string
-	numprocs     uint8
+	numprocs     int
 	umask        int
 	workingdir   Workingdir // validate
 	autostart    bool
 	autorestart  Autorestart
-	exitcodes    []uint8
-	startretries uint16
+	exitcodes    []int
+	startretries int
 	starttime    time.Duration
 	stopsignal   syscall.Signal
 	stoptime     time.Duration
@@ -213,7 +213,7 @@ func (prg *Program) delProcess(proc *Process) {
 }
 
 func newProgram(nameP string, cfgP *config.Program, environ map[string]string) *Program {
-	num := uint8(cfgP.Numprocs)
+	num := int(cfgP.Numprocs)
 
 	prg := &Program{
 		spec: Spec{
@@ -237,9 +237,9 @@ func newProgram(nameP string, cfgP *config.Program, environ map[string]string) *
 		procs: make([]*Process, 0, num),
 	}
 
-	// for i := range num {
-	// 	p := newProcess(i)
-	// 	prg.procs = append(prg.procs, p)
-	// }
+	for i := range num {
+		p := newProcess(i)
+		prg.procs = append(prg.procs, p)
+	}
 	return prg
 }

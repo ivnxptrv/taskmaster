@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"taskmaster/internal/client"
 	"taskmaster/internal/config"
 	"taskmaster/internal/engine"
@@ -34,43 +37,36 @@ func run() error {
 	runtime := engine.NewOsRuntime(log.With("runtime"))
 
 	// create manager
-	m := engine.NewManager(cfg, runtime, log)
-	// validate manager
-	err = m.Validate()
+	m, err := engine.NewManager(cfg, runtime, log)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(4)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// cfg.Print()
-	// m.Print()
-	// print config
-	// cfg.Print()
+	// create context with signals attached
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	// autostrat and listen for events
-	err = m.Boot()
+	// autostart and listen for events
+	err = m.Run(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(5)
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// create entity to send events to manager
-	f := engine.NewForeman(m)
+	// shell := client.NewShell(m)
+	// // if shell == nil {
+	// // }
+	// // w := NewSignalWatcher(f)
+	// // go w.listen()
 
-	shell := client.NewShell(f)
-	// if shell == nil {
-	// }
-	// w := NewSignalWatcher(f)
-	// go w.listen()
-
-	// enter shell
-	shell.Enter()
+	// // enter shell
+	// shell.Enter()
+	stop()
 
 }
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "taskmaster: ", err)
+		fmt.Fprintln(os.Stderr, "taskmaster:", err)
 		os.Exit(1)
 	}
 }

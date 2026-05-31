@@ -17,7 +17,7 @@ type Runtime interface {
 
 type SpawnRequest struct {
 	name       string
-	index      uint8
+	index      int
 	bin        string
 	args       []string
 	umask      int
@@ -78,6 +78,7 @@ func (r *osRuntime) SpawnProcess(ctx context.Context, exitedInbox chan<- event, 
 		defer stdout.Close()
 		defer stderr.Close()
 		err := cmd.Wait()
+		r.log.Debug("proc exited", "name", req.name, "index", req.index)
 		select {
 		case exitedInbox <- ProcExited{Name: req.name, Index: req.index, Status: err}:
 		case <-ctx.Done():
@@ -111,4 +112,5 @@ func (r *osRuntime) Signal(cmd *exec.Cmd, sig syscall.Signal) error {
 	if err != nil {
 		return err
 	}
+	return nil
 }

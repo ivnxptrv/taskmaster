@@ -1,7 +1,7 @@
 package engine
 
 import (
-	"taskmaster/internal/gateway"
+	"time"
 )
 
 // -----------------------------------------------
@@ -11,7 +11,7 @@ type ProcInfo struct {
 	index     int
 	state     string
 	pid       int
-	startedAt int
+	startedAt time.Time
 }
 
 func (m *Manager) Status(name string) ProcInfo {
@@ -25,12 +25,12 @@ func (m *Manager) Status(name string) ProcInfo {
 }
 
 func (m *Manager) Start(name string) error {
-	m.submitEvent(Start{Name: name})
+	// m.submitEvent(Start{Name: name})
 	return nil
 }
 
 func (m *Manager) Stop(name string) error {
-	m.submitEvent(Stop{Name: name})
+	// m.submitEvent(Stop{Name: name})
 	return nil
 }
 
@@ -43,7 +43,7 @@ func (m *Manager) Reload() error {
 }
 
 func (m *Manager) Shutdown() error {
-	m.submitEvent(Shutdown{})
+	// m.submitEvent(Shutdown{})
 	return nil
 }
 
