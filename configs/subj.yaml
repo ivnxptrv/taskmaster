@@ -1,6 +1,6 @@
 programs:
   nginx:
-    cmd: "/usr/bin/nginx -p . -c ./apps/nginx/nginx.conf -e /dev/stderr"
+    cmd: "nginx -p . -c ./apps/nginx/nginx.conf -e /dev/stderr"
     numprocs: 1
     umask: 022
     workingdir: .
@@ -15,11 +15,8 @@ programs:
     stoptime: 10
     stdout: /tmp/nginx.stdout
     stderr: /tmp/nginx.stderr
-    env:
-      STARTED_BY: taskmaster
-      ANSWER: 42
-  worker:
-    cmd: "/usr/bin/sh ./apps/answer/answer"
+  answer:
+    cmd: "./apps/answer/run"
     numprocs: 8
     umask: 077
     workingdir: .
@@ -30,8 +27,8 @@ programs:
     starttime: 5
     stopsignal: USR1
     stoptime: 10
-    stdout: /tmp/worker.stdout
-    stderr: /tmp/worker.stderr
+    stdout: /tmp/answer.stdout
+    stderr: /tmp/answer.stderr
     env:
       STARTED_BY: taskmaster
-      ANSWER: 445
+      ANSWER: 42

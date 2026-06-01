@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 )
 
@@ -30,10 +29,6 @@ func (c Cmd) validate() error {
 
 	if strings.ContainsRune(p, 0) {
 		return fmt.Errorf("path contains invalid characters")
-	}
-
-	if !filepath.IsAbs(p) {
-		return fmt.Errorf("path '%s' must be an absolute path", p)
 	}
 	return nil
 }
