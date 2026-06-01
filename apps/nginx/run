@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+
+exec env nginx -p . -c ./apps/nginx/nginx.conf -e /dev/stderr 

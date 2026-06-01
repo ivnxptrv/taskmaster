@@ -1,6 +1,6 @@
 programs:
   shortlived:
-    cmd: "/run/current-system/sw/bin/sleep 2"
+    cmd: "/usr/bin/sleep 2"
     numprocs: 2
     umask: 022
     workingdir: /tmp
@@ -15,7 +15,7 @@ programs:
     stdout: /tmp/taskmaster-shortlived.out
     stderr: /tmp/taskmaster-shortlived.err
   echoer:
-    cmd: "/run/current-system/sw/bin/echo hello"
+    cmd: "/usr/bin/echo hello"
     numprocs: 1
     umask: 022
     workingdir: /tmp

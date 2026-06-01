@@ -1,7 +1,7 @@
 .PHONY: all build run test test-race vet clean
 
 BIN := taskmaster
-CONF := ./configs/config-subj.yaml
+CONF := ./configs/subj.yaml
 
 all: build
 

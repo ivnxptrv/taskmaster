@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+
+
+while true; do 
+  echo "Answer is ${ANSWER:-24}"
+  sleep 5
+done

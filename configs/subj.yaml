@@ -1,9 +1,9 @@
 programs:
   nginx:
-    cmd: "/usr/bin/nginx -p . -c /home/ivnxptrv/42school/taskmaster/configs/nginx/nginx.conf"
+    cmd: "/usr/bin/nginx -p . -c ./apps/nginx/nginx.conf -e /dev/stderr"
     numprocs: 1
     umask: 022
-    workingdir: /tmp
+    workingdir: .
     autostart: true
     autorestart: unexpected
     exitcodes:
@@ -19,10 +19,10 @@ programs:
       STARTED_BY: taskmaster
       ANSWER: 42
   worker:
-    cmd: "/usr/bin/sh /home/ivnxptrv/42school/taskmaster/configs/sh/script.sh"
+    cmd: "/usr/bin/sh ./apps/answer/answer"
     numprocs: 8
     umask: 077
-    workingdir: /tmp
+    workingdir: .
     autostart: true
     autorestart: unexpected
     exitcodes: [0]
@@ -32,3 +32,6 @@ programs:
     stoptime: 10
     stdout: /tmp/worker.stdout
     stderr: /tmp/worker.stderr
+    env:
+      STARTED_BY: taskmaster
+      ANSWER: 445

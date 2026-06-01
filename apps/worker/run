@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+
+
+while true; do echo "Worker is working..."; sleep 5; done

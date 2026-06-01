@@ -1,6 +1,6 @@
 programs:
   sleeper:
-    cmd: "/run/current-system/sw/bin/sleep 60"
+    cmd: "/usr/bin/sleep 60"
     numprocs: 2
     umask: 022
     workingdir: /tmp
