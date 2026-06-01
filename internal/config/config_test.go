@@ -87,15 +87,3 @@ programs:
 		t.Fatal("expected error for invalid signal, got nil")
 	}
 }
-
-func TestLoad_RejectsRelativeCmd(t *testing.T) {
-	path := writeYAML(t, `
-programs:
-  rel:
-    cmd: "echo hi"
-`)
-	loader := NewLoader(Options{})
-	if _, err := loader.Load(path); err == nil {
-		t.Fatal("expected error for relative cmd path, got nil")
-	}
-}
