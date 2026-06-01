@@ -1,6 +1,6 @@
 programs:
   alpha:
-    cmd: "/usr/bin/sleep 60"
+    cmd: "sleep 60"
     numprocs: 1
     umask: 022
     workingdir: /tmp
@@ -14,7 +14,7 @@ programs:
     stdout: /tmp/taskmaster-alpha.out
     stderr: /tmp/taskmaster-alpha.err
   gamma:
-    cmd: "/usr/bin/sleep 60"
+    cmd: "sleep 60"
     numprocs: 1
     umask: 022
     workingdir: /tmp
