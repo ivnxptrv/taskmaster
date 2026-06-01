@@ -1,9 +1,4 @@
 .DS_Store
 .idea
 *.log
-tmp/
-AGENT.md
-CLAUDE.md
-GEMINI.md
-/supervisor*
 /taskmaster

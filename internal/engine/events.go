@@ -3,371 +3,424 @@ package engine
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os/exec"
 	"slices"
 	"syscall"
-	"taskmaster/internal/config"
 	"time"
 )
 
-// -----------------------------------------------
-
+// event is anything the Manager event loop can process. Handlers run on the
+// single loop goroutine and MUST NOT send into m.events themselves. Follow-up
+// work is a direct function call; future work uses time.AfterFunc whose
+// callback runs in its own goroutine and CAN send.
+//
+// ─────────────────── State × event transition table ───────────────────
+//
+//                    StartCmd      StopCmd         RestartCmd        ProcExited                       StartTimerFired   StopTimerFired   BackoffElapsed
+// NeverStarted/Stopped  spawn→Starting    no-op            spawn→Starting    n/a                              ignore            ignore           ignore
+// Starting              no-op             stopProc→Stopping flag+stopProc    retry/Backoff or Fatal           →Running          ignore           ignore
+// Backoff               no-op             cancelB→Stopped   cancelB+spawn    n/a                              ignore            ignore           spawn→Starting
+// Running               no-op             stopProc→Stopping flag+stopProc    autorestart policy decides       ignore (stale)    ignore           ignore
+// Stopping              flag (resp later) no-op             flag             →Stopped/Exited (or resp if flag)ignore (stale)    SIGKILL          ignore
+// Exited/Fatal          spawn→Starting    no-op            spawn→Starting    n/a                              ignore            ignore           ignore
+//
+// "flag" = set proc.restartPending=true; ProcExited handler checks it first
+// and respawns regardless of autorestart policy.
 type event interface {
-	handle(m *Manager) error
+	handle(m *Manager)
 }
 
-// -----------------------------------------------
+// ────────────────────── Internal lifecycle events ──────────────────────
 
-// event handles finished probe for a fresh process to consider it running
-// state = Running
+// ProcExited is sent by the wait-goroutine after cmd.Wait() returns.
+// Status is the cmd.Wait() error: nil for exit 0, *exec.ExitError otherwise.
+type ProcExited struct {
+	Name   string
+	Index  int
+	Status error
+}
+
+func (e ProcExited) handle(m *Manager) {
+	p, prg := m.lookup(e.Name, e.Index)
+	if p == nil {
+		m.log.Warn("ProcExited for unknown process", "program", e.Name, "index", e.Index)
+		return
+	}
+
+	fatal, bySignal, code := parseProcessStatus(e.Status)
+	prev := p.state
+	pid := p.pid
+
+	m.log.Info("process exited",
+		"program", e.Name, "index", e.Index, "pid", pid,
+		"from_state", prev.String(),
+		"by_signal", bySignal, "code", code, "status", e.Status)
+
+	// Reload requested this slot's removal — short-circuit everything else.
+	if p.removeAfterExit {
+		p.wipe()
+		p.state = Stopped
+		pruneAfterRemoval(m, prg, p)
+		return
+	}
+
+	// Pending restart wins over everything except a fatal exec error.
+	if p.restartPending && !fatal {
+		p.wipe()
+		if err := m.spawn(&prg.Spec, p); err != nil {
+			m.log.Error("restart respawn failed", "program", e.Name, "index", e.Index, "err", err)
+		} else {
+			m.log.Info("restart respawned", "program", e.Name, "index", e.Index, "pid", p.pid)
+		}
+		return
+	}
+
+	// Exec itself failed (binary missing, etc.) — permanent.
+	if fatal {
+		p.wipe()
+		p.state = Fatal
+		return
+	}
+
+	// We requested this stop and the process complied (or got SIGKILL'd
+	// after stoptime). Don't apply autorestart — that's the whole point of
+	// the user-initiated stop.
+	if prev == Stopping {
+		p.wipe()
+		p.state = Stopped
+		return
+	}
+
+	// Death during Starting — whether by code or signal — is a failed start.
+	// Retry until startretries, then give up.
+	if prev == Starting {
+		if p.startTimer != nil {
+			p.startTimer.Stop()
+			p.startTimer = nil
+		}
+		p.retries++
+		if p.retries <= prg.Spec.Startretries {
+			p.state = Backoff
+			delay := backoffDelay(p.retries)
+			m.log.Info("entering backoff",
+				"program", e.Name, "index", e.Index,
+				"retry", p.retries, "max_retries", prg.Spec.Startretries, "delay", delay)
+			name, idx := e.Name, e.Index
+			ctx := m.shutdownCtx
+			p.backoffTimer = time.AfterFunc(delay, func() {
+				select {
+				case m.events <- BackoffElapsed{Name: name, Index: idx}:
+				case <-ctx.Done():
+				}
+			})
+			return
+		}
+		p.wipe()
+		p.state = Fatal
+		m.log.Warn("process gave up after retries",
+			"program", e.Name, "index", e.Index, "retries", p.retries)
+		return
+	}
+
+	// Exit while Running: apply autorestart policy. Signaled exits without
+	// us asking (external SIGKILL etc.) are treated as "unexpected" — they
+	// trigger respawn under always and under unexpected (signal codes are
+	// not in spec.Exitcodes which is exit-code-only).
+	if prev == Running {
+		shouldRestart := false
+		switch prg.Spec.Autorestart {
+		case RestartAlways:
+			shouldRestart = true
+		case RestartNever:
+			shouldRestart = false
+		case RestartUnexpected:
+			// Signaled exits are by definition unexpected from the policy's
+			// point of view. Code-based exits are unexpected iff not in the
+			// configured success-code set.
+			if bySignal {
+				shouldRestart = true
+			} else {
+				shouldRestart = !slices.Contains(prg.Spec.Exitcodes, code)
+			}
+		}
+		p.wipe()
+		if shouldRestart {
+			if err := m.spawn(&prg.Spec, p); err != nil {
+				m.log.Error("autorestart spawn failed", "program", e.Name, "index", e.Index, "err", err)
+			}
+		} else {
+			p.state = Exited
+		}
+		return
+	}
+
+	// Fall-through: log and mark Exited so we don't lose track.
+	p.wipe()
+	p.state = Exited
+}
+
+// StartTimerFired promotes Starting → Running if still in Starting; otherwise stale.
 type StartTimerFired struct {
 	Name  string
 	Index int
 }
 
-func (e StartTimerFired) handle(m *Manager) error {
-	proc, ok := m.getProcess(e.Name, e.Index)
-	if !ok {
-		m.log.Debug("proc not found", "event", "StartTimerFired")
+func (e StartTimerFired) handle(m *Manager) {
+	p, _ := m.lookup(e.Name, e.Index)
+	if p == nil || p.state != Starting {
+		return
 	}
-	proc.state = Running
-	return nil
+	p.state = Running
+	p.retries = 0
+	m.log.Info("process running", "program", e.Name, "index", e.Index, "pid", p.pid)
 }
 
-// -----------------------------------------------
-
-// delay set to wait in backoff state before new spawn
-// state = not changed
-type BackoffElapsed struct {
-	Name  string
-	Index int
-}
-
-func (e BackoffElapsed) handle(m *Manager) error {
-	prg, ok := m.getProgram(e.Name)
-	if !ok {
-		m.log.Debug("program not found", "event", "BackoffElapsed")
-	}
-	proc, ok := prg.getProcess(e.Index)
-	if !ok {
-		m.log.Debug("proc not found", "event", "BackoffElapsed")
-	}
-	err := m.spawn(prg.spec, proc)
-	proc.state = Starting
-
-	return err
-}
-
-// -----------------------------------------------
-
-// time to wait before sending uncatchable kill signal
-// state = Stopped
+// StopTimerFired sends SIGKILL if the process is still Stopping.
 type StopTimerFired struct {
 	Name  string
 	Index int
 }
 
-func (e StopTimerFired) handle(m *Manager) error {
-	proc, ok := m.getProcess(e.Name, e.Index)
-	if !ok {
-		m.log.Debug("program not found", "event", "StopTimerFired")
+func (e StopTimerFired) handle(m *Manager) {
+	p, _ := m.lookup(e.Name, e.Index)
+	if p == nil || p.state != Stopping {
+		return
 	}
-	err := m.runtime.Signal(proc.cmd, syscall.SIGKILL)
-	if err != nil {
-		m.log.Error("sigkill failed", "event", "StopTimerFired")
+	m.log.Warn("stoptime elapsed, sending SIGKILL",
+		"program", e.Name, "index", e.Index, "pid", p.pid)
+	if err := m.runtime.Signal(p.cmd, syscall.SIGKILL); err != nil {
+		m.log.Error("SIGKILL failed", "program", e.Name, "index", e.Index, "err", err)
 	}
-
-	proc.wipe()
-	proc.state = Stopped
-	return err
 }
 
-// -----------------------------------------------
-
-type ProcExited struct {
-	Name   string
-	Index  int
-	Status error // from cmd.Wait() — nil if exit 0; *exec.ExitError otherwise
+// BackoffElapsed respawns the process after the backoff delay.
+type BackoffElapsed struct {
+	Name  string
+	Index int
 }
 
-func (e ProcExited) handle(m *Manager) error {
-	var err error
+func (e BackoffElapsed) handle(m *Manager) {
+	p, prg := m.lookup(e.Name, e.Index)
+	if p == nil || p.state != Backoff {
+		return // stale (e.g. user issued Stop while in backoff)
+	}
+	if err := m.spawn(&prg.Spec, p); err != nil {
+		m.log.Error("backoff respawn failed", "program", e.Name, "index", e.Index, "err", err)
+		p.state = Fatal
+	}
+}
 
-	prg, ok := m.getProgram(e.Name)
+// ─────────────────────── External command events ───────────────────────
+//
+// Each command carries a Reply chan: the public method on Manager (api.go)
+// enqueues the command and blocks on Reply. Always reply on every exit path.
+
+type startCmd struct {
+	Name  string
+	Index int  // -1 means "all processes for this program"
+	Reply chan error
+}
+
+func (e startCmd) handle(m *Manager) {
+	prg, ok := m.programs[e.Name]
 	if !ok {
-		m.log.Debug("program not found", "event", "ProcExited")
+		e.Reply <- fmt.Errorf("unknown program %q", e.Name)
+		return
 	}
-
-	proc, ok := prg.getProcess(e.Index)
-	if !ok {
-		m.log.Debug("process not found", "event", "ProcExited")
+	targets := selectProcs(prg, e.Index)
+	if targets == nil {
+		e.Reply <- fmt.Errorf("process %q[%d] not found", e.Name, e.Index)
+		return
 	}
-
-	fatal, signal, code := parseProcessStatus(e.Status)
-	if fatal {
-		proc.state = Unknown
-		proc.wipe()
-		return fmt.Errorf("process failed")
-	}
-
-	// restart requested
-	if proc.restartPending {
-		proc.wipe()
-		proc.state = Starting
-		return m.spawn(prg.spec, proc)
-	}
-
-	// exited because of signal / Stopping
-	if signal {
-		signal := syscall.Signal(code)
-		if signal == prg.spec.stopsignal {
-			proc.state = Stopped
-		} else {
-			proc.state = Exited
+	var firstErr error
+	for _, p := range targets {
+		if !canStart(p.state) {
+			continue
 		}
-		proc.wipe()
+		if err := m.spawn(&prg.Spec, p); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("%s[%d]: %w", e.Name, p.index, err)
+		}
+	}
+	e.Reply <- firstErr
+}
+
+func canStart(s State) bool {
+	switch s {
+	case NeverStarted, Stopped, Exited, Fatal:
+		return true
+	}
+	return false
+}
+
+type stopCmd struct {
+	Name  string
+	Index int
+	Reply chan error
+}
+
+func (e stopCmd) handle(m *Manager) {
+	prg, ok := m.programs[e.Name]
+	if !ok {
+		e.Reply <- fmt.Errorf("unknown program %q", e.Name)
+		return
+	}
+	targets := selectProcs(prg, e.Index)
+	if targets == nil {
+		e.Reply <- fmt.Errorf("process %q[%d] not found", e.Name, e.Index)
+		return
+	}
+	for _, p := range targets {
+		stopProcess(m, &prg.Spec, p)
+	}
+	e.Reply <- nil
+}
+
+type restartCmd struct {
+	Name  string
+	Index int
+	Reply chan error
+}
+
+func (e restartCmd) handle(m *Manager) {
+	prg, ok := m.programs[e.Name]
+	if !ok {
+		e.Reply <- fmt.Errorf("unknown program %q", e.Name)
+		return
+	}
+	targets := selectProcs(prg, e.Index)
+	if targets == nil {
+		e.Reply <- fmt.Errorf("process %q[%d] not found", e.Name, e.Index)
+		return
+	}
+	var firstErr error
+	for _, p := range targets {
+		switch p.state {
+		case Starting, Running:
+			p.restartPending = true
+			stopProcess(m, &prg.Spec, p)
+		case Stopping:
+			p.restartPending = true
+		case Backoff:
+			if p.backoffTimer != nil {
+				p.backoffTimer.Stop()
+				p.backoffTimer = nil
+			}
+			p.wipe()
+			if err := m.spawn(&prg.Spec, p); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		case NeverStarted, Stopped, Exited, Fatal:
+			if err := m.spawn(&prg.Spec, p); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	e.Reply <- firstErr
+}
+
+// ProcInfo is the snapshot returned by Status. Plain value type.
+type ProcInfo struct {
+	Name      string
+	Index     int
+	State     string
+	Pid       int
+	StartedAt time.Time
+	Retries   int
+}
+
+type statusCmd struct {
+	Reply chan []ProcInfo
+}
+
+func (e statusCmd) handle(m *Manager) {
+	out := make([]ProcInfo, 0)
+	for name, prg := range m.programs {
+		for _, p := range prg.procs {
+			out = append(out, ProcInfo{
+				Name:      name,
+				Index:     p.index,
+				State:     p.state.String(),
+				Pid:       p.pid,
+				StartedAt: p.startedAt,
+				Retries:   p.retries,
+			})
+		}
+	}
+	e.Reply <- out
+}
+
+// shutdownCmd signals every live process and cancels the Manager's
+// shutdown context once everyone has reported exit (or the deadline hits).
+type shutdownCmd struct {
+	Reply chan struct{}
+}
+
+func (e shutdownCmd) handle(m *Manager) {
+	m.log.Info("shutdown requested")
+	// signalExit makes serve() return; Run's gracefulDrain then sends
+	// SIGTERM, waits for ProcExited drainage, and SIGKILLs stragglers.
+	m.signalExit()
+	e.Reply <- struct{}{}
+}
+
+// ───────────────────────────── helpers ─────────────────────────────
+
+func isLive(s State) bool {
+	switch s {
+	case Starting, Running, Stopping, Backoff:
+		return true
+	}
+	return false
+}
+
+// selectProcs returns the slice of processes a command targets.
+// index == -1 means "all processes of the program".
+func selectProcs(prg *Program, index int) []*Process {
+	if index < 0 {
+		return prg.procs
+	}
+	p := prg.process(index)
+	if p == nil {
 		return nil
 	}
-
-	// retry
-	if proc.state == Starting {
-		if proc.startTimer != nil {
-			proc.startTimer.Stop()
-		}
-		if proc.retries < prg.spec.startretries {
-			proc.state = Backoff
-			proc.retries += 1
-			delay := time.Second * 5
-			proc.backoffTimer = time.AfterFunc(delay, func() {
-				m.events <- BackoffElapsed{Name: e.Name, Index: e.Index}
-			})
-		} else {
-			proc.state = Fatal
-			proc.wipe()
-		}
-	}
-
-	// autorestart
-	if proc.state == Running {
-		switch prg.spec.autorestart {
-		case RestartAlways:
-			proc.wipe()
-			proc.state = Starting
-			return m.spawn(prg.spec, proc)
-
-		case RestartNever:
-			proc.wipe()
-			proc.state = Exited
-			return nil
-
-		case RestartUnexpected:
-			if !slices.Contains(prg.spec.exitcodes, code) {
-				proc.wipe()
-				proc.state = Starting
-				return m.spawn(prg.spec, proc)
-			}
-			proc.wipe()
-			proc.state = Exited
-			return nil
-
-		default:
-			return nil
-		}
-	}
-
-	return err
+	return []*Process{p}
 }
 
-// -----------------------------------------------
+// backoffDelay grows quickly to cap restart storms but stays small enough
+// for tests to advance through with a brief sleep. Phase 9 can tune.
+func backoffDelay(retries int) time.Duration {
+	d := time.Duration(retries) * time.Second
+	if d < time.Second {
+		d = time.Second
+	}
+	if d > 30*time.Second {
+		d = 30 * time.Second
+	}
+	return d
+}
 
-// fatal, signal, code
-func parseProcessStatus(status error) (bool, bool, int) {
-
+// parseProcessStatus dissects the error returned by cmd.Wait().
+// Returns:
+//
+//	fatal    — exec itself failed (binary not found, etc.); process never
+//	           really ran. State should go to Fatal.
+//	bySignal — child died from a signal; "code" is the signal number.
+//	code     — exit code (1-255) for normal exits; signal number for signaled exits.
+func parseProcessStatus(status error) (fatal, bySignal bool, code int) {
 	if status == nil {
-		// exitcode 0
 		return false, false, 0
 	}
-
 	var exitErr *exec.ExitError
 	if errors.As(status, &exitErr) {
 		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			// signal number in code slot
-			return false, true, int(ws.Signal()) // signal triggered exit
+			return false, true, int(ws.Signal())
 		}
-
-		code := exitErr.ExitCode()
-		if code >= 1 && code <= 255 {
-			// exitcode 1-255
-			return false, false, code // 1–255
+		ec := exitErr.ExitCode()
+		if ec >= 1 && ec <= 255 {
+			return false, false, ec
 		}
 		return false, true, 0
 	}
-
-	// non-exit error
-	return true, false, 0 // command never ran / non-exit error
-
+	// Anything else from Wait — e.g. fork/exec failure — is fatal.
+	return true, false, 0
 }
-
-// -----------------------------------------------
-
-type Status struct {
-	Name  string
-	Index int
-	Reply chan<- ProcInfo
-}
-
-func (e Status) handle(m *Manager) error {
-	proc, ok := m.getProcess(e.Name, e.Index)
-	if !ok {
-		e.Reply <- ProcInfo{}
-		return fmt.Errorf("process not found")
-	}
-	e.Reply <- ProcInfo{
-		name:      e.Name,
-		index:     e.Index,
-		state:     string(proc.state),
-		pid:       proc.pid,
-		startedAt: proc.startedAt,
-	}
-	return nil
-}
-
-// -----------------------------------------------
-
-type Start struct {
-	Name  string
-	Index int
-	Reply chan struct{}
-}
-
-func (e Start) handle(m *Manager) error {
-	prg, ok := m.getProgram(e.Name)
-	if !ok {
-		e.Reply <- struct{}{}
-		return fmt.Errorf("program not found")
-	}
-	proc, ok := prg.getProcess(e.Index)
-	if !ok {
-		e.Reply <- struct{}{}
-		return fmt.Errorf("process not found")
-	}
-	if proc.state == Starting || proc.state == Backoff || proc.state == Running || proc.state == Stopping {
-		e.Reply <- struct{}{}
-		m.log.Debug("process can not be started")
-		return nil
-	}
-	err := m.spawn(prg.spec, proc)
-	if err != nil {
-		e.Reply <- struct{}{}
-		return err
-	}
-	proc.state = Starting
-	e.Reply <- struct{}{}
-	return nil
-}
-
-// -----------------------------------------------
-
-type Stop struct {
-	Name  string
-	Index int
-	Reply chan struct{}
-}
-
-func (e Stop) handle(m *Manager) error {
-	prg, ok := m.getProgram(e.Name)
-	if !ok {
-		e.Reply <- struct{}{}
-		return fmt.Errorf("program not found")
-	}
-	proc, ok := prg.getProcess(e.Index)
-	if !ok {
-		e.Reply <- struct{}{}
-		return fmt.Errorf("process not found")
-	}
-
-	err := m.runtime.Signal(proc.cmd, prg.spec.stopsignal)
-	if err != nil {
-		return fmt.Errorf("stop event: %w", err)
-	}
-
-	proc.stopTimer = time.AfterFunc(prg.spec.starttime, func() {
-		m.events <- StopTimerFired{Name: prg.spec.name, Index: proc.index}
-	})
-
-	proc.state = Stopping
-	e.Reply <- struct{}{}
-	return nil
-}
-
-// -----------------------------------------------
-
-// send stop event and change state to be restarted on exit event
-// state = Restarting
-type Restart struct {
-	Name  string
-	Index int
-	Reply chan struct{}
-}
-
-func (e Restart) handle(m *Manager) error {
-	// send stop event to event queue
-	// change state to restart to be restarted at exit
-	prg, ok := m.getProgram(e.Name)
-	if !ok {
-		e.Reply <- struct{}{}
-		return fmt.Errorf("program not found")
-	}
-	proc, ok := prg.getProcess(e.Index)
-	if !ok {
-		e.Reply <- struct{}{}
-		return fmt.Errorf("process not found")
-	}
-	proc.restartPending = true
-	m.events <- Stop{Name: prg.spec.name, Index: proc.index, Reply: make(chan struct{})}
-
-	return nil
-}
-
-// -----------------------------------------------
-
-type Reload struct {
-	reply chan struct{}
-}
-
-func (e Reload) handle(m *Manager) error {
-	// loader := config.NewLoader(config.Options{})
-	// cfg, err := loader.Load(e.m.cfg.Filepath)
-	// if err != nil {
-	// 	// log.Error("failed to load config", "error", err)
-	// }
-
-	return nil
-}
-
-// -----------------------------------------------
-
-type Shutdown struct {
-	Reply chan struct{}
-}
-
-func (e Shutdown) handle(m *Manager) error {
-	m.log.Debug("shutdown event received")
-	for _, prg := range m.programs {
-		for _, proc := range prg.procs {
-			if proc.state != NeverStarted || proc.state != Stopped || proc.state != Stopping || proc.state != Exited || proc.state != Fatal || proc.state != Unknown {
-				err := m.runtime.Signal(proc.cmd, syscall.SIGKILL)
-				if err != nil {
-					m.log.Error("sigkill failed")
-				}
-				proc.wipe()
-				proc.state = Stopped
-			}
-		}
-	}
-	e.Reply <- struct{}{}
-	return nil
-}
-
-// -----------------------------------------------

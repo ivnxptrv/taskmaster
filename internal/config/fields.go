@@ -66,7 +66,7 @@ func (u *Umask) setDefault() {
 
 func (u Umask) validate() error {
 	if u > 0777 {
-		return fmt.Errorf("invalid umask: %s", u)
+		return fmt.Errorf("invalid umask: %04o", u)
 	}
 	return nil
 }
@@ -142,9 +142,9 @@ func (ec *Exitcodes) setDefault() {
 }
 
 func (as Exitcodes) validate() error {
-	for c := range as {
+	for _, c := range as {
 		if c < 0 || c > 255 {
-			return fmt.Errorf("ivalid exitcode")
+			return fmt.Errorf("invalid exitcode: %d", c)
 		}
 	}
 	return nil

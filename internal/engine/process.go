@@ -1,13 +1,15 @@
 package engine
 
 import (
-	"os"
 	"os/exec"
 	"time"
 )
 
-// -----------------------------------------------
-
+// State is the lifecycle state of a supervised process.
+//
+// Phase 1 only uses Stopped, Starting, Running, Exited.
+// The full set (Backoff, Stopping, Fatal, Unknown) lands in Phase 3 with
+// autorestart / stop / restart semantics.
 type State int
 
 const (
@@ -40,69 +42,65 @@ func (s State) String() string {
 		return "Exited"
 	case Fatal:
 		return "Fatal"
-	case Unknown:
-		return "Unknown"
 	default:
-		return "UnknownState"
+		return "Unknown"
 	}
 }
 
-// -----------------------------------------------
-
+// Process is the *observed* runtime state of one supervised child process.
+// All fields are owned by the Manager event loop and must only be mutated
+// from a handler running on that loop.
 type Process struct {
-	index          int
-	state          State
-	retries        int
+	index int
+	state State
+
+	// retries counts failed start attempts (Starting → Exited before Running).
+	// Resets to 0 on a successful start.
+	retries int
+
+	// restartPending records that a user-issued Restart should respawn
+	// this process when the current instance exits. Phase 3.
 	restartPending bool
 
-	cmd *exec.Cmd
+	// removeAfterExit is set by reload when this slot is being deleted
+	// (program removed, or numprocs shrunk). ProcExited won't respawn it
+	// and the slot is dropped from the parent Program's procs slice.
+	removeAfterExit bool
 
-	pid          int
-	startedAt    time.Time
+	cmd       *exec.Cmd
+	pid       int
+	startedAt time.Time
+
 	startTimer   *time.Timer
 	backoffTimer *time.Timer
 	stopTimer    *time.Timer
-	stdoutFile   *os.File
-	stderrFile   *os.File
 }
 
 func newProcess(index int) *Process {
-	return &Process{
-		index:          index,
-		state:          NeverStarted,
-		retries:        0,
-		restartPending: false,
-		pid:            -1,
-		cmd:            nil,
-		startedAt:      time.Time{},
-		startTimer:     nil,
-		backoffTimer:   nil,
-		stopTimer:      nil,
-		stdoutFile:     nil,
-		stderrFile:     nil,
-	}
+	return &Process{index: index, state: NeverStarted, pid: -1}
 }
 
-func (proc *Process) wipe() {
-	if proc.startTimer != nil {
-		proc.startTimer.Stop()
+// wipe resets transient runtime fields after a process exits. It does NOT
+// touch state — the caller decides which terminal state to set (Exited,
+// Stopped, Fatal). Timers are stopped best-effort; handlers must defend
+// against stale events that fired before Stop took effect.
+func (p *Process) wipe() {
+	if p.startTimer != nil {
+		p.startTimer.Stop()
 	}
-	if proc.backoffTimer != nil {
-		proc.backoffTimer.Stop()
+	if p.backoffTimer != nil {
+		p.backoffTimer.Stop()
 	}
-	if proc.stopTimer != nil {
-		proc.stopTimer.Stop()
+	if p.stopTimer != nil {
+		p.stopTimer.Stop()
 	}
-
-	proc.startTimer = nil
-	proc.backoffTimer = nil
-	proc.stopTimer = nil
-
-	proc.cmd = nil
-	proc.pid = -1
-	proc.startedAt = time.Time{}
-	proc.retries = 0
-	proc.restartPending = false
-	proc.stdoutFile = nil
-	proc.stderrFile = nil
+	p.startTimer = nil
+	p.backoffTimer = nil
+	p.stopTimer = nil
+	p.cmd = nil
+	p.pid = -1
+	p.startedAt = time.Time{}
+	p.restartPending = false
+	// removeAfterExit is intentionally NOT cleared by wipe — ProcExited
+	// reads it AFTER wipe to decide whether to drop the slot.
 }

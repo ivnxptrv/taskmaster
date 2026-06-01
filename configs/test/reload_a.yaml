@@ -1,0 +1,29 @@
+programs:
+  alpha:
+    cmd: "/run/current-system/sw/bin/sleep 60"
+    numprocs: 1
+    umask: 022
+    workingdir: /tmp
+    autostart: true
+    autorestart: never
+    exitcodes: [0]
+    startretries: 3
+    starttime: 1
+    stopsignal: TERM
+    stoptime: 2
+    stdout: /tmp/taskmaster-alpha.out
+    stderr: /tmp/taskmaster-alpha.err
+  beta:
+    cmd: "/run/current-system/sw/bin/sleep 60"
+    numprocs: 1
+    umask: 022
+    workingdir: /tmp
+    autostart: true
+    autorestart: never
+    exitcodes: [0]
+    startretries: 3
+    starttime: 1
+    stopsignal: TERM
+    stoptime: 2
+    stdout: /tmp/taskmaster-beta.out
+    stderr: /tmp/taskmaster-beta.err

@@ -4,200 +4,229 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"strings"
-	"taskmaster/internal/config"
+	"sync"
+	"syscall"
 	"time"
 )
 
+// Manager is the supervisor's actor: a single goroutine owns every
+// Program/Process mutation. External goroutines (shell, signal watchers,
+// timers, wait-goroutines) only ever send events into m.events; the loop
+// drains them serially.
+//
+// Lifecycle:
+//
+//	NewManager → Run(parent)
+//	  ├─ shutdownCtx (alive — gates timers and wait-goroutine sends)
+//	  ├─ autostart
+//	  ├─ serve(parent)   blocks until parent ctx OR internal exitSignal
+//	  ├─ gracefulDrain   SIGTERM live procs, drain ProcExited up to deadline
+//	  └─ shutdownCancel  releases timer/wait goroutines
 type Manager struct {
-	ctx       context.Context
-	cancelCtx context.CancelFunc
-	cfg       *config.Config
-	log       *slog.Logger
-
+	log     *slog.Logger
 	runtime Runtime
 
 	programs map[string]*Program
-	environ  map[string]string
 
 	events chan event
+
+	// shutdownCtx lives for the entire Run; it gates timer callbacks and
+	// the wait-goroutine's "is anyone reading?" guard. Only cancelled by
+	// the defer at the END of Run, AFTER gracefulDrain returns.
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
+
+	// exitSignal is closed by shutdownCmd or by an external ctx cancellation
+	// to tell serve() to stop accepting new events and proceed to drain.
+	exitSignal chan struct{}
+	exitOnce   sync.Once
+
+	// gracefulDeadline bounds the drain phase.
+	gracefulDeadline time.Duration
 }
 
-func (m Manager) Validate() error {
-	for _, p := range m.programs {
-		err := p.spec.validate()
-		if err != nil {
-			return err
+// NewManager builds a Manager pre-populated with one Program per Spec.
+// The runtime is injected so tests can swap in a fake.
+func NewManager(specs []Spec, runtime Runtime, log *slog.Logger) (*Manager, error) {
+	if runtime == nil {
+		return nil, fmt.Errorf("runtime is nil")
+	}
+	if log == nil {
+		return nil, fmt.Errorf("logger is nil")
+	}
+	m := &Manager{
+		log:              log,
+		runtime:          runtime,
+		programs:         make(map[string]*Program, len(specs)),
+		events:           make(chan event, 256),
+		exitSignal:       make(chan struct{}),
+		gracefulDeadline: 10 * time.Second,
+	}
+	// Pre-Run sentinel — never cancels. Replaced by Run with a real
+	// cancellable child of the parent ctx. Lets API methods be called
+	// before Run starts (during construction in tests) without nil deref.
+	m.shutdownCtx, m.shutdownCancel = context.WithCancel(context.Background())
+	for _, s := range specs {
+		if _, dup := m.programs[s.Name]; dup {
+			return nil, fmt.Errorf("duplicate program name: %q", s.Name)
 		}
+		m.programs[s.Name] = newProgram(s)
 	}
-	return nil
+	return m, nil
 }
 
-func (m Manager) Print() {
-	for name, p := range m.programs {
-		fmt.Printf("program[%s]: %+v\n\n", name, p)
-	}
+// Run drives the supervisor: autostart, serve events, graceful drain on exit.
+// Returns the cause of exit (parent ctx error or nil for internal shutdown).
+func (m *Manager) Run(parent context.Context) error {
+	// shutdownCtx was initialized in NewManager and is shared between Run
+	// and API callers. We do NOT replace it here — that would race with
+	// API methods reading the pointer. We just arrange for it to cancel
+	// when Run returns so timer/wait-goroutines unblock.
+	defer m.shutdownCancel()
+
+	m.autostart()
+
+	exitErr := m.serve(parent)
+	m.gracefulDrain()
+	return exitErr
 }
 
-func getCurrentEnv() map[string]string {
-	envMap := make(map[string]string)
-	for _, e := range os.Environ() {
-		pair := strings.SplitN(e, "=", 2)
-		envMap[pair[0]] = pair[1]
-	}
-	return envMap
-}
-
-func (m *Manager) getProgram(name string) (*Program, bool) {
-	p, ok := m.programs[name]
-	if !ok {
-		return nil, false
-	}
-	return p, ok
-}
-
-func (m *Manager) getProcess(name string, index int) (*Process, bool) {
-	prg, ok := m.getProgram(name)
-	if !ok {
-		return nil, false
-	}
-
-	proc, ok := prg.getProcess(index)
-	if !ok {
-		return nil, false
-	}
-	return proc, true
-}
-
-func popProgram() {}
-
-func NewManager(cfg *config.Config, runtime Runtime, log *slog.Logger) (*Manager, error) {
-	mgr := &Manager{
-		cfg:      cfg,
-		log:      log,
-		runtime:  runtime,
-		programs: make(map[string]*Program),
-		environ:  getCurrentEnv(),
-		events:   make(chan event, 1000),
-	}
-
-	for name, cfgP := range cfg.Programs {
-		p := newProgram(name, &cfgP, mgr.environ)
-		mgr.programs[name] = p
-	}
-
-	// validate manager
-	err := mgr.Validate()
-	if err != nil {
-		return nil, fmt.Errorf("failed to validate manager: %w", err)
-	}
-
-	return mgr, nil
-}
-
-// eventloop
-func (m *Manager) listen() {
+// serve runs the event loop until parent ctx cancels or exitSignal closes.
+func (m *Manager) serve(parent context.Context) error {
 	for {
 		select {
-
-		case <-m.ctx.Done():
-			m.Shutdown()
-
+		case <-parent.Done():
+			m.log.Info("event loop stopping", "reason", parent.Err())
+			return parent.Err()
+		case <-m.exitSignal:
+			m.log.Info("event loop stopping", "reason", "internal shutdown")
+			return nil
 		case e := <-m.events:
-			// run handler as separte goroutine?
-			err := e.handle(m)
-			err = fmt.Errorf("failed to handle event: %w", err)
-			m.log.Warn(err.Error())
+			e.handle(m)
 		}
 	}
 }
 
-// loop through proccesses and start all which are autostart true
-func (m *Manager) Run(ctx context.Context) error {
-
-	// attach context
-	m.ctx, m.cancelCtx = context.WithCancel(ctx)
-
-	// autostart
+// gracefulDrain signals every live process and waits for them to exit, up
+// to gracefulDeadline. Whoever's still alive at the deadline gets SIGKILL.
+func (m *Manager) gracefulDrain() {
+	pending := 0
 	for _, prg := range m.programs {
-		if prg.spec.autostart {
-			for _, proc := range prg.procs {
-				err := m.spawn(prg.spec, proc)
-				proc.state = Starting
-				if err != nil {
-					err = fmt.Errorf("failed to spawn a process: %w", err)
-					m.log.Warn(err.Error())
-				}
+		for _, p := range prg.procs {
+			p.restartPending = false
+			if isLive(p.state) {
+				stopProcess(m, &prg.Spec, p)
+				pending++
 			}
 		}
 	}
-
-	go m.listen()
-
-	return nil
-}
-
-func (m *Manager) submitEvent(e event) {
-	m.events <- e
-}
-
-// allocate running process object
-func (m *Manager) spawn(s Spec, proc *Process) error {
-
-	err := s.validate()
-	if err != nil {
-		return err
+	if pending == 0 {
+		return
 	}
+	m.log.Info("draining", "pending", pending, "deadline", m.gracefulDeadline)
 
+	end := time.Now().Add(m.gracefulDeadline)
+	for pending > 0 {
+		remaining := time.Until(end)
+		if remaining <= 0 {
+			m.log.Warn("drain deadline; SIGKILL stragglers", "pending", pending)
+			m.killAllLive()
+			return
+		}
+		select {
+		case e := <-m.events:
+			if _, ok := e.(ProcExited); ok {
+				pending--
+			}
+			e.handle(m)
+		case <-time.After(remaining):
+			// loop will hit deadline check
+		}
+	}
+	m.log.Info("graceful drain complete")
+}
+
+func (m *Manager) killAllLive() {
+	for _, prg := range m.programs {
+		for _, p := range prg.procs {
+			if isLive(p.state) && p.cmd != nil {
+				_ = m.runtime.Signal(p.cmd, syscall.SIGKILL)
+			}
+		}
+	}
+}
+
+// signalExit closes exitSignal exactly once.
+func (m *Manager) signalExit() {
+	m.exitOnce.Do(func() { close(m.exitSignal) })
+}
+
+// autostart spawns every process for every program whose Spec.Autostart is true.
+func (m *Manager) autostart() {
+	for _, prg := range m.programs {
+		if !prg.Spec.Autostart {
+			continue
+		}
+		for _, proc := range prg.procs {
+			if err := m.spawn(&prg.Spec, proc); err != nil {
+				m.log.Error("autostart failed",
+					"program", prg.Spec.Name, "index", proc.index, "err", err)
+			}
+		}
+	}
+}
+
+// spawn asks the runtime to start one process and wires up the start timer.
+// Caller must run on the event loop goroutine.
+func (m *Manager) spawn(spec *Spec, proc *Process) error {
 	req := SpawnRequest{
-		name:       s.name,
-		index:      proc.index,
-		bin:        string(s.bin),
-		args:       s.args,
-		umask:      s.umask,
-		workingdir: string(s.workingdir),
-		stdoutPath: string(s.stdout),
-		stderrPath: string(s.stderr),
-		env:        s.env,
+		Name:       spec.Name,
+		Index:      proc.index,
+		Bin:        spec.Bin,
+		Args:       spec.Args,
+		Umask:      spec.Umask,
+		Workingdir: spec.Workingdir,
+		StdoutPath: spec.StdoutPath,
+		StderrPath: spec.StderrPath,
+		Env:        spec.Env,
 	}
-
-	// TODO: own context?
-	res, err := m.runtime.SpawnProcess(m.ctx, m.events, req)
+	res, err := m.runtime.SpawnProcess(m.shutdownCtx, req, m.events)
 	if err != nil {
+		proc.state = Fatal
 		return err
 	}
-	// spawn listener for starttime to consider process Running
-	proc.startTimer = time.AfterFunc(s.starttime, func() {
-		m.events <- StartTimerFired{Name: s.name, Index: proc.index}
+
+	proc.cmd = res.Cmd
+	proc.pid = res.Cmd.Process.Pid
+	proc.startedAt = res.StartedAt
+	proc.state = Starting
+
+	name, idx := spec.Name, proc.index
+	delay := spec.Starttime
+	if delay <= 0 {
+		delay = time.Second
+	}
+	ctx := m.shutdownCtx
+	proc.startTimer = time.AfterFunc(delay, func() {
+		select {
+		case m.events <- StartTimerFired{Name: name, Index: idx}:
+		case <-ctx.Done():
+		}
 	})
-	proc.startedAt = time.Now()
-	proc.cmd = res.cmd
-	proc.stdoutFile = res.stdoutFile
-	proc.stderrFile = res.stderrFile
 
 	return nil
 }
 
-// gracefully shutdown
-// func (m *Manager) despawn(p *Process) error {}
-
-// func (s *realSpawner) Despawn(p *Process) error {
-// 	if p.cmd == nil || p.cmd.Process == nil {
-// 		return nil // Process isn't running
-// 	}
-
-// 	p.log.Info("sending SIGTERM to process", "pid", p.pid)
-// 	err := p.cmd.Process.Signal(syscall.SIGTERM)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	// Schedule SIGKILL after 5 seconds
-// 	p.stopTimer = time.AfterFunc(5*time.Second, func() {
-// 		p.log.Warn("process did not exit, sending SIGKILL", "pid", p.pid)
-// 		_ = p.cmd.Process.Kill()
-// 	})
-
-// 	return nil
-// }
+// lookup returns the Process and its parent Program by (name, index).
+// Returns (nil, nil) if the program or index is unknown.
+func (m *Manager) lookup(name string, index int) (*Process, *Program) {
+	prg, ok := m.programs[name]
+	if !ok {
+		return nil, nil
+	}
+	p := prg.process(index)
+	if p == nil {
+		return nil, prg
+	}
+	return p, prg
+}
