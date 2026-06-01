@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"taskmaster/internal/client"
 	"taskmaster/internal/config"
 	"taskmaster/internal/engine"
 	"taskmaster/internal/logger"

@@ -11,9 +11,10 @@ import (
 )
 
 type Manager struct {
-	ctx context.Context
-	cfg *config.Config
-	log *slog.Logger
+	ctx       context.Context
+	cancelCtx context.CancelFunc
+	cfg       *config.Config
+	log       *slog.Logger
 
 	runtime Runtime
 
@@ -78,7 +79,7 @@ func NewManager(cfg *config.Config, runtime Runtime, log *slog.Logger) (*Manager
 		runtime:  runtime,
 		programs: make(map[string]*Program),
 		environ:  getCurrentEnv(),
-		events:   make(chan event, 100),
+		events:   make(chan event, 1000),
 	}
 
 	for name, cfgP := range cfg.Programs {
@@ -101,11 +102,12 @@ func (m *Manager) listen() {
 		select {
 
 		case <-m.ctx.Done():
-			return // garefully drain events and shutdown
+			m.Shutdown()
 
 		case e := <-m.events:
+			// run handler as separte goroutine?
 			err := e.handle(m)
-			err = fmt.Errorf("failed to handle message: %w", err)
+			err = fmt.Errorf("failed to handle event: %w", err)
 			m.log.Warn(err.Error())
 		}
 	}
@@ -115,7 +117,7 @@ func (m *Manager) listen() {
 func (m *Manager) Run(ctx context.Context) error {
 
 	// attach context
-	m.ctx = ctx
+	m.ctx, m.cancelCtx = context.WithCancel(ctx)
 
 	// autostart
 	for _, prg := range m.programs {

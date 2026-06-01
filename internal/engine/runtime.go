@@ -81,8 +81,8 @@ func (r *osRuntime) SpawnProcess(ctx context.Context, exitedInbox chan<- event, 
 		r.log.Debug("proc exited", "name", req.name, "index", req.index)
 		select {
 		case exitedInbox <- ProcExited{Name: req.name, Index: req.index, Status: err}:
-		case <-ctx.Done():
-			return
+			// case <-ctx.Done():
+			// 	return
 		}
 	}()
 

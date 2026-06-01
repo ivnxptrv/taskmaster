@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"log/slog"
 	"strings"
 	"syscall"
 	"taskmaster/internal/config"
@@ -225,8 +224,8 @@ func newProgram(nameP string, cfgP *config.Program, environ map[string]string) *
 			workingdir:   Workingdir(cfgP.Workingdir),
 			autostart:    bool(cfgP.Autostart),
 			autorestart:  AutorestartToEnum(cfgP.Autorestart),
-			exitcodes:    []uint8(cfgP.Exitcodes),
-			startretries: uint16(cfgP.Startretries),
+			exitcodes:    []int(cfgP.Exitcodes),
+			startretries: int(cfgP.Startretries),
 			starttime:    time.Duration(cfgP.Starttime),
 			stopsignal:   stringSignalToSyscall[string(cfgP.Stopsignal)],
 			stoptime:     time.Duration(cfgP.Stoptime),

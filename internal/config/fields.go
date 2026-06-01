@@ -135,13 +135,18 @@ func (r *Autorestart) setDefault() {
 
 // -----------------------------------------------
 
-type Exitcodes []uint8
+type Exitcodes []int
 
 func (ec *Exitcodes) setDefault() {
-	*ec = []uint8{0}
+	*ec = []int{0}
 }
 
 func (as Exitcodes) validate() error {
+	for c := range as {
+		if c < 0 || c > 255 {
+			return fmt.Errorf("ivalid exitcode")
+		}
+	}
 	return nil
 }
 

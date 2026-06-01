@@ -6,7 +6,7 @@ import (
 )
 
 func NewDefaultLogger() (*slog.Logger, error) {
-	output, err := fileutil.OpenOutput("./logs.out", false)
+	output, err := fileutil.OpenOutput("./logs.out")
 	if err != nil {
 		return nil, err
 	}

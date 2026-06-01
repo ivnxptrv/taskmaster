@@ -111,7 +111,14 @@ func (e ProcExited) handle(m *Manager) error {
 		return fmt.Errorf("process failed")
 	}
 
-	// exited because of signal
+	// restart requested
+	if proc.restartPending {
+		proc.wipe()
+		proc.state = Starting
+		return m.spawn(prg.spec, proc)
+	}
+
+	// exited because of signal / Stopping
 	if signal {
 		signal := syscall.Signal(code)
 		if signal == prg.spec.stopsignal {
@@ -207,15 +214,16 @@ func parseProcessStatus(status error) (bool, bool, int) {
 type Status struct {
 	Name  string
 	Index int
-	reply chan<- ProcInfo
+	Reply chan<- ProcInfo
 }
 
 func (e Status) handle(m *Manager) error {
 	proc, ok := m.getProcess(e.Name, e.Index)
 	if !ok {
+		e.Reply <- ProcInfo{}
 		return fmt.Errorf("process not found")
 	}
-	e.reply <- ProcInfo{
+	e.Reply <- ProcInfo{
 		name:      e.Name,
 		index:     e.Index,
 		state:     string(proc.state),
@@ -230,65 +238,105 @@ func (e Status) handle(m *Manager) error {
 type Start struct {
 	Name  string
 	Index int
-	reply chan struct{}
+	Reply chan struct{}
 }
 
 func (e Start) handle(m *Manager) error {
 	prg, ok := m.getProgram(e.Name)
 	if !ok {
-		e.reply <- struct{}{}
+		e.Reply <- struct{}{}
 		return fmt.Errorf("program not found")
 	}
 	proc, ok := prg.getProcess(e.Index)
 	if !ok {
-		e.reply <- struct{}{}
+		e.Reply <- struct{}{}
 		return fmt.Errorf("process not found")
 	}
 	if proc.state == Starting || proc.state == Backoff || proc.state == Running || proc.state == Stopping {
-		e.reply <- struct{}{}
+		e.Reply <- struct{}{}
 		m.log.Debug("process can not be started")
 		return nil
 	}
 	err := m.spawn(prg.spec, proc)
 	if err != nil {
-		e.reply <- struct{}{}
+		e.Reply <- struct{}{}
 		return err
 	}
-	e.reply <- struct{}{}
+	proc.state = Starting
+	e.Reply <- struct{}{}
 	return nil
 }
 
 // -----------------------------------------------
 
 type Stop struct {
-	Name string
+	Name  string
+	Index int
+	Reply chan struct{}
 }
 
-func (e Stop) handle() error {
-	// sends stopsignal to a process
-	// start timer for stoptime
-	// set state STOPPING
+func (e Stop) handle(m *Manager) error {
+	prg, ok := m.getProgram(e.Name)
+	if !ok {
+		e.Reply <- struct{}{}
+		return fmt.Errorf("program not found")
+	}
+	proc, ok := prg.getProcess(e.Index)
+	if !ok {
+		e.Reply <- struct{}{}
+		return fmt.Errorf("process not found")
+	}
+
+	err := m.runtime.Signal(proc.cmd, prg.spec.stopsignal)
+	if err != nil {
+		return fmt.Errorf("stop event: %w", err)
+	}
+
+	proc.stopTimer = time.AfterFunc(prg.spec.starttime, func() {
+		m.events <- StopTimerFired{Name: prg.spec.name, Index: proc.index}
+	})
+
+	proc.state = Stopping
+	e.Reply <- struct{}{}
 	return nil
 }
 
 // -----------------------------------------------
 
+// send stop event and change state to be restarted on exit event
+// state = Restarting
 type Restart struct {
-	Name string
+	Name  string
+	Index int
+	Reply chan struct{}
 }
 
-func (e Restart) handle() error {
+func (e Restart) handle(m *Manager) error {
+	// send stop event to event queue
+	// change state to restart to be restarted at exit
+	prg, ok := m.getProgram(e.Name)
+	if !ok {
+		e.Reply <- struct{}{}
+		return fmt.Errorf("program not found")
+	}
+	proc, ok := prg.getProcess(e.Index)
+	if !ok {
+		e.Reply <- struct{}{}
+		return fmt.Errorf("process not found")
+	}
+	proc.restartPending = true
+	m.events <- Stop{Name: prg.spec.name, Index: proc.index, Reply: make(chan struct{})}
+
 	return nil
 }
 
 // -----------------------------------------------
 
 type Reload struct {
-	m     *Manager
 	reply chan struct{}
 }
 
-func (e Reload) handle() error {
+func (e Reload) handle(m *Manager) error {
 	// loader := config.NewLoader(config.Options{})
 	// cfg, err := loader.Load(e.m.cfg.Filepath)
 	// if err != nil {
@@ -301,17 +349,24 @@ func (e Reload) handle() error {
 // -----------------------------------------------
 
 type Shutdown struct {
-	m     *Manager
-	reply chan struct{}
+	Reply chan struct{}
 }
 
-func (e Shutdown) handle() error {
-	e.m.log.Debug("shutdown event received")
-	// garefuly shutdown SIGTERM
-	// inf 5s SIGKILL
-	// close files?
-	// e.m.iter(despawnPrg)
-	// e.res <- struct{}{}
+func (e Shutdown) handle(m *Manager) error {
+	m.log.Debug("shutdown event received")
+	for _, prg := range m.programs {
+		for _, proc := range prg.procs {
+			if proc.state != NeverStarted || proc.state != Stopped || proc.state != Stopping || proc.state != Exited || proc.state != Fatal || proc.state != Unknown {
+				err := m.runtime.Signal(proc.cmd, syscall.SIGKILL)
+				if err != nil {
+					m.log.Error("sigkill failed")
+				}
+				proc.wipe()
+				proc.state = Stopped
+			}
+		}
+	}
+	e.Reply <- struct{}{}
 	return nil
 }
 

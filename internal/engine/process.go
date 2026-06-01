@@ -1,10 +1,8 @@
 package engine
 
 import (
-	"log/slog"
 	"os"
 	"os/exec"
-	"syscall"
 	"time"
 )
 
@@ -52,9 +50,10 @@ func (s State) String() string {
 // -----------------------------------------------
 
 type Process struct {
-	index   int
-	state   State
-	retries int
+	index          int
+	state          State
+	retries        int
+	restartPending bool
 
 	cmd *exec.Cmd
 
@@ -69,17 +68,18 @@ type Process struct {
 
 func newProcess(index int) *Process {
 	return &Process{
-		index:        index,
-		state:        NeverStarted,
-		retries:      0,
-		pid:          -1,
-		cmd:          nil,
-		startedAt:    time.Time{},
-		startTimer:   nil,
-		backoffTimer: nil,
-		stopTimer:    nil,
-		stdoutFile:   nil,
-		stderrFile:   nil,
+		index:          index,
+		state:          NeverStarted,
+		retries:        0,
+		restartPending: false,
+		pid:            -1,
+		cmd:            nil,
+		startedAt:      time.Time{},
+		startTimer:     nil,
+		backoffTimer:   nil,
+		stopTimer:      nil,
+		stdoutFile:     nil,
+		stderrFile:     nil,
 	}
 }
 
@@ -102,6 +102,7 @@ func (proc *Process) wipe() {
 	proc.pid = -1
 	proc.startedAt = time.Time{}
 	proc.retries = 0
+	proc.restartPending = false
 	proc.stdoutFile = nil
 	proc.stderrFile = nil
 }

@@ -14,27 +14,30 @@ type ProcInfo struct {
 	startedAt time.Time
 }
 
-func (m *Manager) Status(name string) ProcInfo {
-	// chanResponse := make(chan string)
-	// d.events <- Status{Name: name, chanResponse: chanResponse}
-	// return <-chanResponse
-
-	// get real info
-	// or send event with chanel back to get result
-	return ProcInfo{}
+func (m *Manager) Status(name string, index int) ProcInfo {
+	reply := make(chan ProcInfo)
+	m.events <- Status{Name: name, Index: index, Reply: reply}
+	return <-reply
 }
 
-func (m *Manager) Start(name string) error {
-	// m.submitEvent(Start{Name: name})
+func (m *Manager) Start(name string, index int) error {
+	reply := make(chan struct{})
+	m.events <- Start{Name: name, Index: index, Reply: reply}
+	<-reply
 	return nil
 }
 
-func (m *Manager) Stop(name string) error {
-	// m.submitEvent(Stop{Name: name})
+func (m *Manager) Stop(name string, index int) error {
+	reply := make(chan struct{})
+	m.events <- Stop{Name: name, Index: index, Reply: reply}
+	<-reply
 	return nil
 }
 
-func (m *Manager) Restart(name string) error {
+func (m *Manager) Restart(name string, index int) error {
+	reply := make(chan struct{})
+	m.events <- Restart{Name: name, Index: index, Reply: reply}
+	<-reply
 	return nil
 }
 
@@ -43,7 +46,9 @@ func (m *Manager) Reload() error {
 }
 
 func (m *Manager) Shutdown() error {
-	// m.submitEvent(Shutdown{})
+	reply := make(chan struct{})
+	m.events <- Shutdown{Reply: reply}
+	<-reply
 	return nil
 }
 
