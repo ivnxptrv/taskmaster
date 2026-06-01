@@ -87,7 +87,7 @@ func (m *Manager) Run(parent context.Context) error {
 	m.autostart()
 
 	exitErr := m.serve(parent)
-	m.gracefulDrain()
+	m.gracefulDrain() // kills all alive
 	return exitErr
 }
 

@@ -38,5 +38,3 @@ func (l *Loader) Load(filepath string) (*Config, error) {
 
 	return config, nil
 }
-
-// func (l *Loader) Parse(data []byte) (*Config, error) { ... }

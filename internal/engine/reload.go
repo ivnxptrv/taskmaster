@@ -28,15 +28,17 @@ func (e reloadCmd) handle(m *Manager) {
 	//    different → in-place restart (preserves pids of unchanged programs).
 	for name, prg := range m.programs {
 		ns, present := newByName[name]
-		if !present {
+		if !present { // brand new program
 			continue // handled in step 3
 		}
-		if prg.Spec.Equal(ns) {
+		if prg.Spec.Equal(ns) { // same program unchanged
 			m.log.Info("reload: program unchanged", "program", name)
 			continue
 		}
 		m.log.Info("reload: program changed; restarting", "program", name,
 			"old_numprocs", prg.Spec.Numprocs, "new_numprocs", ns.Numprocs)
+
+		// same program but changed spec
 		applyChangedSpec(m, prg, ns)
 	}
 
@@ -105,6 +107,7 @@ func applyChangedSpec(m *Manager, prg *Program, ns Spec) {
 		p := prg.procs[i]
 		switch p.state {
 		case Starting, Running, Backoff:
+			// set restart flag and kill have it then restarted on exit with new spec
 			p.restartPending = true
 			if p.state == Backoff && p.backoffTimer != nil {
 				p.backoffTimer.Stop()

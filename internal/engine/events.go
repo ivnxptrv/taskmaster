@@ -16,7 +16,8 @@ import (
 //
 // ─────────────────── State × event transition table ───────────────────
 //
-//                    StartCmd      StopCmd         RestartCmd        ProcExited                       StartTimerFired   StopTimerFired   BackoffElapsed
+//	StartCmd      StopCmd         RestartCmd        ProcExited                       StartTimerFired   StopTimerFired   BackoffElapsed
+//
 // NeverStarted/Stopped  spawn→Starting    no-op            spawn→Starting    n/a                              ignore            ignore           ignore
 // Starting              no-op             stopProc→Stopping flag+stopProc    retry/Backoff or Fatal           →Running          ignore           ignore
 // Backoff               no-op             cancelB→Stopped   cancelB+spawn    n/a                              ignore            ignore           spawn→Starting
@@ -60,6 +61,7 @@ func (e ProcExited) handle(m *Manager) {
 	if p.removeAfterExit {
 		p.wipe()
 		p.state = Stopped
+		// drops after config reload
 		pruneAfterRemoval(m, prg, p)
 		return
 	}
@@ -135,7 +137,7 @@ func (e ProcExited) handle(m *Manager) {
 			shouldRestart = false
 		case RestartUnexpected:
 			// Signaled exits are by definition unexpected from the policy's
-			// point of view. Code-based exits are unexpected iff not in the
+			// point of view. Code-based exits are unexpected if not in the
 			// configured success-code set.
 			if bySignal {
 				shouldRestart = true
@@ -217,7 +219,7 @@ func (e BackoffElapsed) handle(m *Manager) {
 
 type startCmd struct {
 	Name  string
-	Index int  // -1 means "all processes for this program"
+	Index int // -1 means "all processes for this program"
 	Reply chan error
 }
 
