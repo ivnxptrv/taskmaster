@@ -17,18 +17,18 @@ programs:
     stderr: /tmp/nginx.stderr
   app:
     cmd: "./apps/answer/run"
-    numprocs: 1
-    umask: 002
+    numprocs: 10
+    umask: 000
     workingdir: .
     autostart: true
     autorestart: never
     exitcodes: [0]
     startretries: 2
-    starttime: 0
+    starttime: 2
     stopsignal: USR2
     stoptime: 10
     stdout: ./app.stdout
     stderr: ./app.stderr
     env:
       STARTED_BY: taskmaster
-      ANSWER: 24
+      ANSWER: 42
