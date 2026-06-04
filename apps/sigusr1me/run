@@ -1,8 +1,11 @@
 #!/usr/bin/env sh
 
+trap '' USR2          # ignore USR2; default Term is overridden
+
 graceful_shutdown() {
     echo "PID: $$ | USR1 signal received. Performing cleanup..."
     echo "PID: $$ | Exiting gracefully."
+    sleep 5
     exit 0
 }
 
