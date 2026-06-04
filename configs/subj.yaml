@@ -16,16 +16,16 @@ programs:
     stdout: /tmp/nginx.stdout
     stderr: /tmp/nginx.stderr
   answer:
-    cmd: "./apps/answer/run"
-    numprocs: 8
+    cmd: "./apps/sigusr1me/run"
+    numprocs: 5
     umask: 077
     workingdir: .
     autostart: true
-    autorestart: unexpected
+    autorestart: never
     exitcodes: [0]
-    startretries: 3
-    starttime: 5
-    stopsignal: USR1
+    startretries: 2
+    starttime: 1
+    stopsignal: USR2
     stoptime: 10
     stdout: /tmp/answer.stdout
     stderr: /tmp/answer.stderr

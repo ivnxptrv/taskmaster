@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+
+
+echo "PID: $$ | exit42 here, exiting with error code 42 in 5 sec"
+sleep 6
+exit 42

@@ -77,3 +77,12 @@ func (s Spec) Equal(o Spec) bool {
 		s.StdoutPath == o.StdoutPath &&
 		s.StderrPath == o.StderrPath
 }
+
+// equalIgnoringNumprocs returns true iff s and o are Equal modulo Numprocs.
+// Used by the reload diff so that a pure numprocs change only resizes the
+// pool (grow → spawn new slots, shrink → stop surplus) without restarting
+// the processes that survive the change.
+func (s Spec) equalIgnoringNumprocs(o Spec) bool {
+	s.Numprocs = o.Numprocs
+	return s.Equal(o)
+}

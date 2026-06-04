@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+
+graceful_shutdown() {
+    echo "PID: $$ | USR1 signal received. Performing cleanup..."
+    echo "PID: $$ | Exiting gracefully."
+    exit 0
+}
+
+trap graceful_shutdown USR1
+
+echo "PID: $$ | Script is running. Send USR1 to shut down."
+
+while true; do
+    sleep 1
+done

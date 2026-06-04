@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+
+
+echo "PID: $$ | broken here, exiting with error code 24 instantly"
+exit 24

@@ -20,10 +20,16 @@ func newProgram(spec Spec) *Program {
 	return prg
 }
 
-// process returns the process at index, or nil if out of range.
+// process returns the proc whose .index matches, or nil if none exists.
+// Lookup is by the proc's .index field, not by slice position: indices are
+// stable for the proc's lifetime, so wait-goroutines and timers that
+// captured an index at spawn/stop time always resolve back to the same
+// proc even after siblings have been pruned out of the slice.
 func (p *Program) process(index int) *Process {
-	if index < 0 || index >= len(p.procs) {
-		return nil
+	for _, proc := range p.procs {
+		if proc.index == index {
+			return proc
+		}
 	}
-	return p.procs[index]
+	return nil
 }

@@ -146,13 +146,17 @@ func TestReload_RemovedProgram_StopsAndDropsFromMap(t *testing.T) {
 func TestReload_NumprocsGrows_AddsAndAutostartsNewSlots(t *testing.T) {
 	old := testSpec("foo", 2)
 	old.Autostart = true
-	m, _ := newTestManager(t, []Spec{old})
+	m, fr := newTestManager(t, []Spec{old})
 
 	// Bring up both.
 	startSync(t, m, "foo", 0)
 	startSync(t, m, "foo", 1)
 	StartTimerFired{Name: "foo", Index: 0}.handle(m)
 	StartTimerFired{Name: "foo", Index: 1}.handle(m)
+	pidsBefore := [2]int{
+		mustGetProc(t, m, "foo", 0).pid,
+		mustGetProc(t, m, "foo", 1).pid,
+	}
 
 	ns := old
 	ns.Numprocs = 4
@@ -165,10 +169,16 @@ func TestReload_NumprocsGrows_AddsAndAutostartsNewSlots(t *testing.T) {
 	if len(prg.procs) != 4 {
 		t.Fatalf("len(procs) = %d, want 4", len(prg.procs))
 	}
-	// Existing slots are restarted because Spec changed (numprocs).
+	// Numprocs-only change: existing slots keep running, no restart pending.
 	for i := 0; i < 2; i++ {
-		if !prg.procs[i].restartPending {
-			t.Errorf("slot %d should be restartPending", i)
+		if prg.procs[i].restartPending {
+			t.Errorf("slot %d should NOT be restartPending (numprocs-only reload)", i)
+		}
+		if prg.procs[i].state != Running {
+			t.Errorf("slot %d state = %v, want Running (unchanged)", i, prg.procs[i].state)
+		}
+		if prg.procs[i].pid != pidsBefore[i] {
+			t.Errorf("slot %d pid changed: was %d, now %d", i, pidsBefore[i], prg.procs[i].pid)
 		}
 	}
 	// New slots are Starting (spawn called during reload).
@@ -176,6 +186,14 @@ func TestReload_NumprocsGrows_AddsAndAutostartsNewSlots(t *testing.T) {
 		if prg.procs[i].state != Starting {
 			t.Errorf("slot %d state = %v, want Starting", i, prg.procs[i].state)
 		}
+	}
+	// 2 original spawns + 2 new-slot spawns; no respawn of survivors.
+	if got := len(fr.Spawns()); got != 4 {
+		t.Fatalf("spawns = %d, want 4 (2 original + 2 new slots)", got)
+	}
+	// No signals: surviving slots were never asked to stop.
+	if got := len(fr.Signals()); got != 0 {
+		t.Fatalf("signals = %d, want 0 (survivors untouched)", got)
 	}
 }
 
@@ -188,6 +206,7 @@ func TestReload_NumprocsShrinks_MarksSurplusForRemoval(t *testing.T) {
 		startSync(t, m, "foo", i)
 		StartTimerFired{Name: "foo", Index: i}.handle(m)
 	}
+	pidKept := mustGetProc(t, m, "foo", 0).pid
 
 	ns := old
 	ns.Numprocs = 1
@@ -199,6 +218,16 @@ func TestReload_NumprocsShrinks_MarksSurplusForRemoval(t *testing.T) {
 	prg := m.programs["foo"]
 	if len(prg.procs) != 3 {
 		t.Fatalf("len(procs) = %d, want 3 (still alive)", len(prg.procs))
+	}
+	// Numprocs-only shrink: surviving slot 0 is untouched.
+	if prg.procs[0].restartPending {
+		t.Error("slot 0 should NOT be restartPending (numprocs-only reload)")
+	}
+	if prg.procs[0].state != Running {
+		t.Errorf("slot 0 state = %v, want Running (unchanged)", prg.procs[0].state)
+	}
+	if prg.procs[0].pid != pidKept {
+		t.Errorf("slot 0 pid changed: was %d, now %d", pidKept, prg.procs[0].pid)
 	}
 	if !prg.procs[1].removeAfterExit || !prg.procs[2].removeAfterExit {
 		t.Fatal("indices 1 and 2 should be removeAfterExit")
@@ -213,5 +242,79 @@ func TestReload_NumprocsShrinks_MarksSurplusForRemoval(t *testing.T) {
 
 	if got := len(prg.procs); got != 1 {
 		t.Fatalf("after exits, len(procs) = %d, want 1", got)
+	}
+}
+
+// Regression: pruneAfterRemoval used to re-number .index on survivors after
+// every slot removal, which mis-targeted any ProcExited / StopTimerFired that
+// captured an index by value at spawn or stop time. With shrinks of N>2 and
+// non-tail-first exit order, surplus procs could be stranded in Stopping
+// because their stopTimer's captured idx pointed at a slot that no longer
+// existed. Drive an out-of-order shrink to lock the behavior in.
+func TestReload_NumprocsShrinks_OutOfOrderExits_AllPruned(t *testing.T) {
+	old := testSpec("foo", 5)
+	m, _ := newTestManager(t, []Spec{old})
+
+	for i := 0; i < 5; i++ {
+		startSync(t, m, "foo", i)
+		StartTimerFired{Name: "foo", Index: i}.handle(m)
+	}
+	pidKept := mustGetProc(t, m, "foo", 0).pid
+
+	ns := old
+	ns.Numprocs = 1
+
+	reply := make(chan error, 1)
+	reloadCmd{NewSpecs: []Spec{ns}, Reply: reply}.handle(m)
+	<-reply
+
+	// Surplus exits arrive out of order, including non-tail-first.
+	for _, idx := range []int{2, 4, 1, 3} {
+		procKilledBy("foo", idx, syscall.SIGTERM).handle(m)
+	}
+
+	prg := m.programs["foo"]
+	if got := len(prg.procs); got != 1 {
+		t.Fatalf("after exits, len(procs) = %d, want 1", got)
+	}
+	if prg.procs[0].index != 0 {
+		t.Fatalf("survivor .index = %d, want 0 (stable)", prg.procs[0].index)
+	}
+	if prg.procs[0].state != Running {
+		t.Fatalf("survivor state = %v, want Running", prg.procs[0].state)
+	}
+	if prg.procs[0].pid != pidKept {
+		t.Fatalf("survivor pid changed: was %d, now %d", pidKept, prg.procs[0].pid)
+	}
+}
+
+func TestReload_NumprocsAndOtherFieldChange_RestartsSurvivors(t *testing.T) {
+	old := testSpec("foo", 2)
+	old.Autostart = true
+	m, _ := newTestManager(t, []Spec{old})
+
+	startSync(t, m, "foo", 0)
+	startSync(t, m, "foo", 1)
+	StartTimerFired{Name: "foo", Index: 0}.handle(m)
+	StartTimerFired{Name: "foo", Index: 1}.handle(m)
+
+	ns := old
+	ns.Numprocs = 3
+	ns.Bin = "/bin/false" // any non-numprocs change
+
+	reply := make(chan error, 1)
+	reloadCmd{NewSpecs: []Spec{ns}, Reply: reply}.handle(m)
+	<-reply
+
+	prg := m.programs["foo"]
+	// Survivors are restarted because something other than numprocs changed.
+	for i := 0; i < 2; i++ {
+		if !prg.procs[i].restartPending {
+			t.Errorf("slot %d should be restartPending", i)
+		}
+	}
+	// The grown slot is up.
+	if prg.procs[2].state != Starting {
+		t.Errorf("slot 2 state = %v, want Starting", prg.procs[2].state)
 	}
 }

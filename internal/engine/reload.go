@@ -35,8 +35,14 @@ func (e reloadCmd) handle(m *Manager) {
 			m.log.Info("reload: program unchanged", "program", name)
 			continue
 		}
-		m.log.Info("reload: program changed; restarting", "program", name,
-			"old_numprocs", prg.Spec.Numprocs, "new_numprocs", ns.Numprocs)
+		if prg.Spec.equalIgnoringNumprocs(ns) {
+			m.log.Info("reload: program numprocs changed; resizing",
+				"program", name,
+				"old_numprocs", prg.Spec.Numprocs, "new_numprocs", ns.Numprocs)
+		} else {
+			m.log.Info("reload: program changed; restarting", "program", name,
+				"old_numprocs", prg.Spec.Numprocs, "new_numprocs", ns.Numprocs)
+		}
 
 		// same program but changed spec
 		applyChangedSpec(m, prg, ns)
@@ -88,41 +94,47 @@ func (e reloadCmd) handle(m *Manager) {
 }
 
 // applyChangedSpec updates the Program's spec and reconciles processes:
-//   - Procs at indices common to old/new numprocs: live → flag restart and
-//     stopProcess (ProcExited will respawn with the new spec); dead → leave
-//     (next user-issued Start uses new spec).
+//   - Procs at indices common to old/new numprocs: if only Numprocs differs,
+//     leave them alone; otherwise live → flag restart and stopProcess
+//     (ProcExited will respawn with the new spec); dead → leave (next
+//     user-issued Start uses new spec).
 //   - Surplus old procs (index >= new.Numprocs): mark removeAfterExit and stop.
 //   - New procs (index >= old.Numprocs): allocate; spawn if Autostart.
 func applyChangedSpec(m *Manager, prg *Program, ns Spec) {
 	oldN := len(prg.procs)
 	newN := ns.Numprocs
+	oldSpec := prg.Spec
 	prg.Spec = ns
 
-	// Indices that exist on both sides → in-place restart.
+	// Indices that exist on both sides → in-place restart, unless the only
+	// change is Numprocs (then the surviving slots keep running untouched).
 	common := oldN
 	if newN < common {
 		common = newN
 	}
-	for i := 0; i < common; i++ {
-		p := prg.procs[i]
-		switch p.state {
-		case Starting, Running, Backoff:
-			// set restart flag and kill have it then restarted on exit with new spec
-			p.restartPending = true
-			if p.state == Backoff && p.backoffTimer != nil {
-				p.backoffTimer.Stop()
-				p.backoffTimer = nil
-				p.wipe()
-				if err := m.spawn(&prg.Spec, p); err != nil {
-					m.log.Error("reload spawn failed", "program", ns.Name, "index", i, "err", err)
+	numprocsOnly := oldSpec.equalIgnoringNumprocs(ns)
+	if !numprocsOnly {
+		for i := 0; i < common; i++ {
+			p := prg.procs[i]
+			switch p.state {
+			case Starting, Running, Backoff:
+				// set restart flag and kill have it then restarted on exit with new spec
+				p.restartPending = true
+				if p.state == Backoff && p.backoffTimer != nil {
+					p.backoffTimer.Stop()
+					p.backoffTimer = nil
+					p.wipe()
+					if err := m.spawn(&prg.Spec, p); err != nil {
+						m.log.Error("reload spawn failed", "program", ns.Name, "index", i, "err", err)
+					}
+				} else {
+					stopProcess(m, &prg.Spec, p)
 				}
-			} else {
-				stopProcess(m, &prg.Spec, p)
+			case Stopping:
+				p.restartPending = true
+			case NeverStarted, Stopped, Exited, Fatal:
+				// Dead — leave; user can Start to bring it up with new spec.
 			}
-		case Stopping:
-			p.restartPending = true
-		case NeverStarted, Stopped, Exited, Fatal:
-			// Dead — leave; user can Start to bring it up with new spec.
 		}
 	}
 
@@ -184,22 +196,21 @@ func pruneProgram(m *Manager, name string, prg *Program) {
 }
 
 // pruneAfterRemoval is called from ProcExited when p.removeAfterExit is true.
-// Drops p from prg.procs (preserving the order of remaining slots) and, if
+// Drops p from prg.procs (preserving the .index of every survivor) and, if
 // the whole program is being removed and now has no procs, drops the program
 // from Manager.programs.
+//
+// Survivor .index values are NEVER rewritten. Wait-goroutines and stop/start
+// timers capture their proc's index by value into closures at spawn/stop time
+// and re-numbering would mis-target every captured event still in flight.
+// Program.process(index) does a linear scan so lookups remain correct even
+// when the slice has holes in its old [0..numprocs) range.
 func pruneAfterRemoval(m *Manager, prg *Program, p *Process) {
-	// Find p in prg.procs by pointer identity and remove that slot.
 	for i, q := range prg.procs {
 		if q == p {
 			prg.procs = append(prg.procs[:i], prg.procs[i+1:]...)
 			break
 		}
-	}
-	// Re-index remaining procs so their .index matches their slice position.
-	// This keeps shell commands "stop foo 3" referring to the right slot
-	// after a reload-shrink.
-	for i, q := range prg.procs {
-		q.index = i
 	}
 	if prg.removeWhenEmpty {
 		// Find this prg in m.programs and check if we can drop it.
