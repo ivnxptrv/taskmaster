@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+
+while true; do 
+  echo "PID: $$ | my CWD: $(pwd)"
+  sleep 5
+done

@@ -15,20 +15,20 @@ programs:
     stoptime: 10
     stdout: /tmp/nginx.stdout
     stderr: /tmp/nginx.stderr
-  answer:
-    cmd: "./apps/sigusr1me/run"
-    numprocs: 5
-    umask: 077
+  app:
+    cmd: "./apps/answer/run"
+    numprocs: 1
+    umask: 002
     workingdir: .
     autostart: true
     autorestart: never
     exitcodes: [0]
     startretries: 2
-    starttime: 1
+    starttime: 0
     stopsignal: USR2
     stoptime: 10
-    stdout: /tmp/answer.stdout
-    stderr: /tmp/answer.stderr
+    stdout: ./app.stdout
+    stderr: ./app.stderr
     env:
       STARTED_BY: taskmaster
-      ANSWER: 42
+      ANSWER: 24
